@@ -551,7 +551,9 @@
 
   function route() {
     if (!CFG.url || !CFG.key) {
-      app.innerHTML = '<p class="msg err">設定（config.js）がありません。PC で make_karte.py を走らせてください。</p>';
+      // 箱の鍵を入れる前に住所だけ先に作った状態（make_karte.py --placeholder）
+      app.innerHTML = '<p class="msg err">まだ準備中です。使えるようになったら佐藤さんから知らせます。</p>' +
+        '<p class="small muted">（箱の設定 config.js が空です。PC で make_karte.py を走らせると入ります）</p>';
       return;
     }
     session().then(function (s) {

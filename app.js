@@ -550,6 +550,12 @@
   }
 
   function route() {
+    if (location.protocol === 'file:') {
+      // PC の _基盤\karte\index.html を直接開いたとき。ここには鍵が無い（公開するときに入る）
+      app.innerHTML = '<p class="msg err">これは PC にある元のファイルです。カルテはこちらで開いてください。</p>' +
+        '<p><a href="https://vet1123st-cyber.github.io/shirakawa-karte/">https://vet1123st-cyber.github.io/shirakawa-karte/</a></p>';
+      return;
+    }
     if (!CFG.url || !CFG.key) {
       // 箱の鍵を入れる前に住所だけ先に作った状態（make_karte.py --placeholder）
       app.innerHTML = '<p class="msg err">まだ準備中です。使えるようになったら佐藤さんから知らせます。</p>' +

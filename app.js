@@ -621,7 +621,9 @@
   // ------------------------------------------------------------ 画面: トップ
   // PC の farm_summary.py が毎朝計算して箱の farm_summary 表に置く（ロボットの群の平均・授精率・妊娠率・受胎率）
   function showTop() {
-    loadPage('top', 'top', 'farm_summary?select=section,key,date,value,n,note&order=date.asc', drawTop);
+    // ゲノムの行（約270KB）はゲノムのページだけで読む
+    loadPage('top', 'top', 'farm_summary?select=section,key,date,value,n,note&section=neq.' + encodeURIComponent('ゲノム') +
+      '&order=date.asc', drawTop);
   }
 
   function pick(rows, sec, key) {
@@ -727,7 +729,8 @@
       return '<text x="' + (L - 4) + '" y="' + (Y(v) + 4).toFixed(1) + '" text-anchor="end">' + v + '</text>' +
         '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(v).toFixed(1) + '" y2="' + Y(v).toFixed(1) + '" class="grid"/>';
     }).join('');
-    var lab = function (d) { return monthly ? d.slice(2, 4) + '/' + (+d.slice(5, 7)) : md(d); };
+    var lab = typeof monthly === 'function' ? monthly
+      : function (d) { return monthly ? d.slice(2, 4) + '/' + (+d.slice(5, 7)) : md(d); };
     var mk = '<text x="' + L + '" y="' + (H - 5) + '" text-anchor="start">' + lab(ds[0]) + '</text>' +
       '<text x="' + (W - R) + '" y="' + (H - 5) + '" text-anchor="end">' + lab(ds[ds.length - 1]) + '</text>';
     var legend = series.length > 1 ? '<div class="legend">' + series.map(function (s) {
@@ -735,6 +738,150 @@
     }).join('') + '</div>' : '';
     return legend + '<svg class="herd" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' +
       esc(series.map(function (s) { return s.name; }).join('・')) + '（' + esc(unit) + '）の移り変わり">' + ticks + g + mk + '</svg>';
+  }
+
+  // ------------------------------------------------------------ 画面: ゲノム
+  // PC の farm_summary.py が、今のゲノムダッシュボードと同じ payload を箱に1行で置く。
+  // 計算はダッシュボードと同じ engine.js（同期群比較・全国とのくらべ）。在籍かどうかは台帳（TAF）で決める
+  var GVIEWS = [['herd', '群'], ['sire', '精液'], ['year', '経年'], ['cows', '個体']];
+  var gRaw = null;
+  function gState(k, v) {
+    try {
+      if (v === undefined) return sessionStorage.getItem('g.' + k);
+      sessionStorage.setItem('g.' + k, v);
+    } catch (e) { return null; /* 覚えられなくても使える */ }
+  }
+  function showGenome() {
+    loadPage('genome', 'genome', 'farm_summary?select=date,n,note&section=eq.' + encodeURIComponent('ゲノム') +
+      '&key=eq.payload', drawGenome);
+  }
+  function here(c) { var x = byId[c.id]; return x ? x.status === '在籍' : c.status === '在籍'; }
+  // 小数の桁は形質ごと（牛の値の大きさで決める。TPI は0桁、脂肪量・蛋白量は1桁、SCS は2桁）
+  var gDec = {};
+  function gfmt(k, v) {
+    if (v == null || isNaN(v)) return '—';
+    var s = (+v).toFixed(gDec[k] == null ? 1 : gDec[k]);
+    return /^-0(\.0+)?$/.test(s) ? s.slice(1) : s;
+  }
+  function setDec(E, D) {
+    gDec = {};
+    D.traits.forEach(function (t) {
+      var mx = 0;
+      D.cows.forEach(function (c) { var v = E.num(c.g[t.k]); if (v != null) mx = Math.max(mx, Math.abs(v)); });
+      gDec[t.k] = mx >= 500 ? 0 : mx >= 10 ? 1 : 2;
+    });
+  }
+  function pctTxt(p) { return p == null ? '—' : Math.round(p) + '%'; }
+
+  function drawGenome(rows, top) {
+    if (!rows.length || !rows[0].note) { app.innerHTML = top + none('ゲノムの数字がまだ箱にありません。'); return; }
+    if (!window.Engine) { app.innerHTML = top + '<p class="msg err">ゲノムの計算（engine.js）が読めませんでした。開き直してください。</p>'; return; }
+    var E = window.Engine;
+    if (gRaw !== rows[0].note) { E.init(JSON.parse(rows[0].note)); gRaw = rows[0].note; setDec(E, E.data()); }
+    var D = E.data();
+    var view = gState('view') || 'herd';
+    var trait = gState('trait') || 'TPI';
+    if (!E.meta(trait)) trait = D.traits[0].k;
+    var grp = gState('grp') || '在籍';
+    var all = D.cows, mine = all.filter(here);
+    var html = top + '<div class="head"><div class="name"><b>ゲノム</b></div><div class="id">' + esc(D.batch) +
+      ' の評価・検査済み ' + all.length + ' 頭（いま居る ' + mine.length + ' 頭）</div></div>' +
+      '<div class="seg" id="gv">' + GVIEWS.map(function (v) {
+        return '<button type="button" data-gv="' + v[0] + '"' + (v[0] === view ? ' class="on"' : '') + '>' + v[1] + '</button>';
+      }).join('') + '</div>';
+    if (view !== 'herd') {
+      html += '<div class="pickers"><select id="gt" aria-label="形質">' + D.traits.map(function (t) {
+        return '<option value="' + esc(t.k) + '"' + (t.k === trait ? ' selected' : '') + '>' + esc(t.label) + '</option>';
+      }).join('') + '</select>' + (view === 'year' || view === 'cows' ? '<select id="gg" aria-label="牛"><option' +
+        (grp === '在籍' ? ' selected' : '') + '>在籍</option><option' + (grp === '全頭' ? ' selected' : '') + '>全頭</option></select>' : '') + '</div>';
+    }
+    var cows = grp === '全頭' ? all : mine;
+    if (view === 'herd') html += gHerd(E, D, mine);
+    else if (view === 'sire') html += gSire(E, D, all, trait);
+    else if (view === 'year') html += gYear(E, D, cows, trait, grp);
+    else html += gCows(E, D, cows, trait);
+    html += src('ゲノム表（eGプラス）・精液マスタ（精液のPDF）・全国の分布（eGプラス）。計算はゲノムダッシュボードと同じ');
+    app.innerHTML = html;
+    [].forEach.call(document.querySelectorAll('#gv button'), function (b) {
+      b.onclick = function () { gState('view', b.getAttribute('data-gv')); drawGenome(rows, ''); window.scrollTo(0, 0); };
+    });
+    var gt = document.getElementById('gt'), gg = document.getElementById('gg');
+    if (gt) gt.onchange = function () { gState('trait', gt.value); drawGenome(rows, ''); };
+    if (gg) gg.onchange = function () { gState('grp', gg.value); drawGenome(rows, ''); };
+  }
+
+  function gHerd(E, D, mine) {
+    var t = '<div class="scroll"><table class="tbl"><thead><tr><th>形質</th><th>いま居る牛の平均</th><th>全国</th><th>北海道</th></tr></thead><tbody>';
+    D.traits.forEach(function (m) {
+      var s = E.stats(mine.map(function (c) { return E.num(c.g[m.k]); }));
+      if (!s.n) return;
+      t += '<tr><td class="l">' + esc(m.label) + (m.better === 'low' ? '<span class="small muted">（低いほど良い）</span>' : '') + '</td><td>' +
+        gfmt(m.k, s.mean) + '</td><td>' + pctTxt(E.pctNational(m.k, s.mean)) + '</td><td>' + pctTxt(E.pctHokkaido(m.k, s.mean)) + '</td></tr>';
+    });
+    return box('群（いま居る牛）', t + '</tbody></table></div>' +
+      '<p class="small muted">全国・北海道は、平均がその分布の何%の位置にあるか（eGプラスの分布から。上ほど良い。低いほど良い形質は向きをそろえてある）。±2%ほどの幅があります。</p>');
+  }
+
+  function gSire(E, D, all, trait) {
+    var m = E.meta(trait);
+    var rows = E.sireRows(all, trait).filter(function (r) { return r.n > 0; });
+    var good = function (x) { return m.better === 'low' ? -x : x; };
+    rows.sort(function (a, b) {
+      var A = a.adjN >= 2 ? good(a.adj) : -1e9, B = b.adjN >= 2 ? good(b.adj) : -1e9;
+      return B - A || b.n - a.n;
+    });
+    var t = '<div class="scroll"><table class="tbl"><thead><tr><th>種雄牛</th><th>娘</th><th>娘の平均</th><th>同期群比較</th><th>精液</th></tr></thead><tbody>';
+    rows.forEach(function (r) {
+      var sure = r.ci && (r.ci[0] > 0 || r.ci[1] < 0);
+      var cls = sure ? (good(r.adj) > 0 ? ' class="ok"' : ' class="hi"') : '';
+      t += '<tr><td class="l">' + esc(r.name || r.key) + (r.naab ? '<br><span class="small muted">' + esc(r.naab) + '</span>' : '') + '</td>' +
+        '<td>' + r.n + '</td><td>' + gfmt(trait, r.mean) + '</td>' +
+        '<td' + cls + '>' + (r.adjN >= 2 ? (r.adj >= 0 ? '+' : '') + gfmt(trait, r.adj) + (sure ? '' : '<br><span class="small muted">言い切れない</span>') : '—') + '</td>' +
+        '<td>' + (r.master != null ? gfmt(trait, r.master) : '—') + '</td></tr>';
+    });
+    return box('精液ごと（' + esc(m.label) + '・検査済みの全頭）', t + '</tbody></table></div>' +
+      '<p class="small muted">同期群比較 = 娘1頭ずつを「同じ年に生まれた、よその父の娘」の平均とくらべた差の平均。牧場が年々良くなっているぶん、' +
+      '最近つけた精液ほど良く見えるのを外してある。95%の幅が0をまたぐときは「言い切れない」。緑は良い・赤は悪いと言い切れるもの。' +
+      '精液 = 精液マスタ（PDF）の値。</p>');
+  }
+
+  function gYear(E, D, cows, trait, grp) {
+    var m = E.meta(trait);
+    var co = E.cohorts(cows, trait).filter(function (r) { return r.n > 0; });
+    var html = trend([{ name: '平均', color: 'var(--spark)', pts: co.map(function (r) { return { d: r.year, v: r.mean }; }) },
+                      { name: '中央', color: 'var(--spark2)', pts: co.map(function (r) { return { d: r.year, v: r.med }; }) }],
+      m.label, function (y) { return y + '年生'; });
+    var t = '<div class="scroll"><table class="tbl"><thead><tr><th>生まれ年</th><th>頭数</th><th>平均</th><th>中央</th><th>全国</th></tr></thead><tbody>';
+    co.forEach(function (r) {
+      t += '<tr><td>' + esc(r.year) + '</td><td>' + r.n + '</td><td>' + gfmt(trait, r.mean) + '</td><td>' + gfmt(trait, r.med) +
+        '</td><td>' + pctTxt(E.pctNational(trait, r.mean)) + '</td></tr>';
+    });
+    html = box('生まれ年ごと（' + esc(m.label) + '・' + esc(grp) + '）', html + t + '</tbody></table></div>' +
+      '<p class="small muted">いちばん新しい評価の回の値で、生まれ年どうしをくらべている（基準の改定をまたがない）。</p>');
+    // 評価の回ごとの群平均（平均まとめ）。2025年4月に基準が変わったので、旧と新を別の線にする
+    var tr = (D.trend || []).filter(function (x) { return x.v && x.v[trait] != null; });
+    if (tr.length >= 2) {
+      var oldB = tr.filter(function (x) { return x.base === '旧'; }), newB = tr.filter(function (x) { return x.base === '新'; });
+      html += box('評価の回ごとの群平均（平均まとめ・' + esc(m.label) + '）',
+        trend([{ name: '旧基準', color: 'var(--spark2)', pts: oldB.map(function (x) { return { d: x.date, v: x.v[trait] }; }) },
+               { name: '新基準', color: 'var(--spark)', pts: newB.map(function (x) { return { d: x.date, v: x.v[trait] }; }) }],
+          m.label, function (d) { return d.slice(2, 4) + '/' + (+d.slice(5, 7)); }) +
+        '<p class="small muted">牧場がその回に出した「平均まとめ」の値。2025年4月に評価の基準が変わったので、旧と新は線をつなげない（同じものさしではない）。</p>');
+    }
+    return html;
+  }
+
+  function gCows(E, D, cows, trait) {
+    var m = E.meta(trait);
+    var list = cows.map(function (c) { return { c: c, v: E.num(c.g[trait]) }; }).filter(function (x) { return x.v != null; });
+    list.sort(function (a, b) { return m.better === 'low' ? a.v - b.v : b.v - a.v; });
+    return box('個体の順位（' + esc(m.label) + '）', '<ul class="list">' + list.map(function (x, i) {
+      var c = x.c, row = byId[c.id];
+      return '<li><a class="rowlink" href="#/cow/' + esc(c.id) + '"><span class="no">' + (i + 1) + '</span>' +
+        '<span><b>' + esc(c.mgmt || '----') + '</b> <span class="small muted">' + esc(c.birth ? c.birth.slice(0, 4) + '年生' : '') +
+        (row && row.status !== '在籍' ? '・居ない' : '') + '</span></span><span class="v">' + gfmt(trait, x.v) +
+        '<span class="small muted">　全国 ' + pctTxt(E.pctNational(trait, x.v)) + '</span></span></a></li>';
+    }).join('') + '</ul><p class="small muted">押すとその牛のカルテ。</p>');
   }
 
   // ------------------------------------------------------------ 画面: 頭数と見通し（段階3）
@@ -876,6 +1023,7 @@
     var h = location.hash;
     if (/^#\/cows?(\/|$)/.test(h)) return 'cows';
     if (h === '#/herd') return 'herd';
+    if (h === '#/genome') return 'genome';
     return 'top';
   }
   function markTab(t) {
@@ -922,6 +1070,7 @@
         var m = location.hash.match(/^#\/cow\/(\d{10})/);
         if (m) showCow(m[1]);
         else if (t === 'herd') showHerd();
+        else if (t === 'genome') showGenome();
         else if (t === 'cows') showSearch();
         else showTop();
       });

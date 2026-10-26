@@ -154,18 +154,23 @@
     if (!rows.length || sending) { bar(); return Promise.resolve(); }
     sending = true;
     return farmId().then(function (farm) {
-      var stamp = {};
-      var body = rows.map(function (r) {
+      var stamp = {}, by = {};
+      // 表ごとにまとめて送る（繁殖は input_repro、記録は input_record。記録は牛の代わりに target を持つことがある）
+      rows.forEach(function (r) {
         stamp[r.id] = r.at;
-        return { id: r.id, farm_id: farm, cow_id: r.cow_id, date: r.date, kind: r.kind, data: r.data || {}, deleted: !!r.deleted };
+        var t = r.table || 'input_repro', row = { id: r.id, farm_id: farm, cow_id: r.cow_id || null, date: r.date, kind: r.kind,
+                                                 data: r.data || {}, deleted: !!r.deleted };
+        if (t === 'input_record') row.target = r.target || null;
+        (by[t] = by[t] || []).push(row);
       });
-      return F.upsert('input_repro', body).then(function () {
+      return Promise.all(Object.keys(by).map(function (t) { return F.upsert(t, by[t]); })).then(function () {
         var s = store();
         Object.keys(stamp).forEach(function (id) { if (s[id] && s[id].at === stamp[id]) s[id].sent = true; });
         store(s);
         S.err = '';
         var el = document.getElementById('rrecent');        // 「送信待ち」の字を消す
         if (el) el.innerHTML = recentEvents();
+        if (window.RecordPage) window.RecordPage.sent();
       });
     }).catch(function (err) {
       S.err = err.status === 404 ? '箱にまだ入力の表がありません（佐藤さんが箱の表を流すと送れます）'
@@ -349,7 +354,9 @@
       if (!el || !r.length) return;
       el.innerHTML = F.box('前回まで', '<ul class="list">' + r.map(function (x) {
         if (typeof x.treatment === 'string' && x.treatment) x.treatment = x.treatment.split(',');
-        return '<li><span class="d">' + F.day(x.date) + '</span>　' + F.esc(summary(x)) + (x.vet ? '<span class="small muted">（' + F.esc(x.vet) + '）</span>' : '') + '</li>';
+        // 診た人は、スマホから入れた分はメールアドレスなので @ より前だけ出す
+        return '<li><span class="d">' + F.day(x.date) + '</span>　' + F.esc(summary(x)) +
+          (x.vet ? '<span class="small muted">（' + F.esc(String(x.vet).split('@')[0]) + '）</span>' : '') + '</li>';
       }).join('') + '</ul>' + F.src('検診の所見（PC が毎朝取り込んだもの）'));
     }).catch(function () { /* 前回が読めなくても入力はできる */ });
   }
@@ -580,4 +587,9 @@
   }
 
   window.ReproPage = { show: show, send: function () { return send(); }, unsent: unsent };
+  // 記録のページ（record.js）も同じ控え・同じ送り方を使う（電波の切れ方は同じなので、2つ作らない）
+  window.FarmQueue = {
+    keep: function (r) { F = F || window.Farm; keep(r); }, store: store, unsent: unsent, uuid: uuid,
+    localDate: localDate, bar: function () { bar(); }, send: function () { F = F || window.Farm; return send(); }
+  };
 })();

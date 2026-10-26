@@ -1036,6 +1036,7 @@
     if (h === '#/herd') return 'herd';
     if (h === '#/genome') return 'genome';
     if (/^#\/repro(\/|$)/.test(h)) return 'repro';
+    if (/^#\/record(\/|$)/.test(h)) return 'record';
     return 'top';
   }
 
@@ -1043,7 +1044,7 @@
   window.Farm = {
     app: app, get: get, upsert: upsert, esc: esc, n: n, day: day, md: md, days: days, box: box, none: none,
     src: src, find: function (q) { return find(q); }, byId: function () { return byId; },
-    me: function () { return (load() || {}).email || ''; }, tabOf: tabOf
+    me: function () { return (load() || {}).email || ''; }, tabOf: tabOf, trend: function (s, u, l) { return trend(s, u, l); }
   };
   function markTab(t) {
     var nav = document.getElementById('tabs');
@@ -1092,6 +1093,7 @@
         else if (t === 'herd') showHerd();
         else if (t === 'genome') showGenome();
         else if (t === 'repro') window.ReproPage.show(location.hash);
+        else if (t === 'record') window.RecordPage.show(location.hash);
         else if (t === 'cows') showSearch();
         else showTop();
       });

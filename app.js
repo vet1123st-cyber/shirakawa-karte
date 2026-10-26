@@ -266,6 +266,7 @@
 
   function showSearch() {
     app.innerHTML =
+      '<a class="tohere" href="#/herd">頭数と1年先の見通し<span>区画ごと・容量とくらべる →</span></a>' +
       '<div class="search"><input id="q" type="search" inputmode="numeric" pattern="[0-9]*" ' +
       'placeholder="4桁" autocomplete="off" aria-label="牛の4桁の番号"></div><ul class="hits" id="hits"></ul>' +
       '<p class="small muted" id="cnt"></p>';
@@ -611,6 +612,134 @@
     }).join('') + '</ul>' + src('哺乳アプリ'));
   }
 
+  // ------------------------------------------------------------ 画面: 頭数と見通し（段階3）
+  // PC の herd_outlook.py が毎朝計算して箱の herd_outlook 表に置く。ここは読んで描くだけ（計算はしない）。
+  //   kind 実際（過去13か月の月末）／いま／見通し（1年先。lo〜hi は300回くり返したうちの下10%〜上10%）／設定
+  var ROOMS = ['搾乳（ロボット）', 'つなぎ', '乾乳前期', '分娩舎', '哺乳・D型', '育成舎'];
+  function showHerd() {
+    var m = memo('herd');
+    if (m && m.v) drawHerd(m.v, '<p class="small muted" id="stale">' + md(new Date(m.at).toISOString()) + ' ' +
+      new Date(m.at).toTimeString().slice(0, 5) + ' に読んだ控えです。新しくしています…</p>');
+    else app.innerHTML = '<a class="back" href="#/">← さがす</a><p class="muted">読んでいます…</p>';
+    get('herd_outlook?select=item,month,kind,lo,mid,hi,cap,note&order=month.asc')
+      .then(function (r) {
+        if (location.hash !== '#/herd') return;
+        memo('herd', r);
+        drawHerd(r, '');
+      })
+      .catch(function (err) {
+        if (location.hash !== '#/herd') return;
+        var s = document.getElementById('stale');
+        if (s) { s.className = 'msg err'; s.textContent = '新しくできませんでした。下は前に読んだ控えです（' + err.message + '）'; return; }
+        app.innerHTML = '<a class="back" href="#/">← さがす</a><p class="msg err">読めませんでした（' + esc(err.message) +
+          '）。' + (err.status === 404 ? '箱にまだ「頭数」の表がありません（佐藤さんが箱の表を流し直すと出ます）。' : '電波を確かめて、開き直してください。') + '</p>';
+      });
+  }
+
+  function series(rows, item) {
+    // 月の順に [{m, kind, lo, mid, hi, cap}]。いま（日付つき）は月の位置に置く
+    return rows.filter(function (r) { return r.item === item && r.kind !== '設定'; })
+      .map(function (r) { return { m: r.month.slice(0, 7), day: r.month, kind: r.kind, lo: +r.lo, mid: +r.mid, hi: +r.hi, cap: r.cap == null ? null : +r.cap }; });
+  }
+
+  function drawHerd(rows, top) {
+    if (!rows.length) { app.innerHTML = '<a class="back" href="#/">← さがす</a>' + top + none('まだ計算されていません。'); return; }
+    var set = {};
+    rows.filter(function (r) { return r.item === '設定'; }).forEach(function (r) { set[r.month] = r.note; });
+    var html = '<a class="back" href="#/">← さがす</a>' + top +
+      '<div class="head"><div class="name"><b>頭数と1年先の見通し</b></div>' +
+      '<div class="id">' + day(set['計算日']) + ' に計算。線は真ん中、帯は「ありそうな幅」（300回くり返した下10%〜上10%）</div></div>';
+    html += box('いま と 1年先', roomTable(rows) + src('TAF（在籍・繁殖・異動のCSV、在籍牛一覧）・レリー（つなぎの頭数）'));
+    ROOMS.forEach(function (it) { html += box(it, chart(series(rows, it))); });
+    html += box('分娩と除籍（月ごと）', chart(series(rows, '分娩'), '分娩', 'var(--spark)') + chart(series(rows, '除籍'), '除籍', 'var(--spark2)'));
+    html += box('経産・未経産', chart(series(rows, '経産'), '経産') + chart(series(rows, '未経産'), '未経産'));
+    html += box('決めごと', '<dl class="kv">' + Object.keys(set).filter(function (k) { return k !== '計算日'; }).map(function (k) {
+      return '<dt>' + esc(k) + '</dt><dd class="small">' + esc(set[k]) + '</dd>';
+    }).join('') + '</dl>' + checkLine(rows));
+    app.innerHTML = html;
+  }
+
+  function roomTable(rows) {
+    var t = '<div class="scroll"><table class="tbl"><thead><tr><th>区画</th><th>いま</th><th>1年で多い月</th><th>多いとき</th><th>容量</th></tr></thead><tbody>';
+    ROOMS.forEach(function (it) {
+      var s = series(rows, it);
+      var now = s.filter(function (x) { return x.kind === 'いま'; })[0];
+      var fut = s.filter(function (x) { return x.kind === '見通し'; });
+      var peak = fut.reduce(function (a, x) { return !a || x.mid > a.mid ? x : a; }, null);
+      var hiMax = fut.reduce(function (a, x) { return Math.max(a, x.hi); }, 0);
+      var cap = (now && now.cap) || (peak && peak.cap);
+      var over = function (v) { return cap && v > cap ? ' class="hi"' : ''; };
+      t += '<tr><td>' + esc(it) + '</td><td' + (now ? over(now.mid) : '') + '>' + (now ? n(now.mid) : '—') + '</td>' +
+        '<td' + (peak ? over(peak.mid) : '') + '>' + (peak ? n(peak.mid) + '<span class="small muted">（' + (+peak.m.slice(5)) + '月）</span>' : '—') + '</td>' +
+        '<td' + over(hiMax) + '>' + (fut.length ? n(hiMax) : '—') + '</td><td>' + (cap ? n(cap) : '—') + '</td></tr>';
+    });
+    return t + '</tbody></table></div><p class="small muted">赤は容量を超えるところ。「多いとき」は1年のうち幅の上の端がいちばん高い月。</p>';
+  }
+
+  // 過去（実線）・いま（点）・見通し（点線と帯）・容量（赤の点線）を1枚に。ライブラリを使わず SVG を手で描く
+  function chart(s, label, color) {
+    if (!s.length) return none('記録がありません。');
+    color = color || 'var(--spark)';
+    var W = 320, H = 130, L = 26, R = 6, T = 8, B = 20;
+    var xs = s.map(function (x) { return x.m; });
+    var months = xs.filter(function (m, i) { return xs.indexOf(m) === i; });
+    var cap = s.reduce(function (a, x) { return x.cap || a; }, null);
+    var vals = [];
+    s.forEach(function (x) { vals.push(x.lo, x.hi); });
+    if (cap) vals.push(cap);
+    var lo = Math.min.apply(null, vals.concat([0])), hi = Math.max.apply(null, vals);
+    if (hi === lo) hi = lo + 1;
+    hi = Math.ceil(hi * 1.08);
+    var X = function (m) { return L + months.indexOf(m) / Math.max(1, months.length - 1) * (W - L - R); };
+    var Y = function (v) { return T + (1 - (v - lo) / (hi - lo)) * (H - T - B); };
+    var past = s.filter(function (x) { return x.kind === '実際'; });
+    var now = s.filter(function (x) { return x.kind === 'いま'; });
+    var fut = s.filter(function (x) { return x.kind === '見通し'; });
+    var line = function (arr, key) { return arr.map(function (x, i) { return (i ? 'L' : 'M') + X(x.m).toFixed(1) + ' ' + Y(x[key]).toFixed(1); }).join(' '); };
+    var g = '';
+    if (fut.length) {
+      var startF = now.length ? now : past.slice(-1);
+      var band = startF.concat(fut);
+      g += '<path d="' + line(band, 'hi') + ' L' + band.slice().reverse().map(function (x) { return X(x.m).toFixed(1) + ' ' + Y(x.lo).toFixed(1); }).join(' L') +
+        ' Z" fill="' + color + '" opacity=".16"/>';
+      g += '<path d="' + line(band, 'mid') + '" fill="none" stroke="' + color + '" stroke-width="2" stroke-dasharray="4 3"/>';
+    }
+    if (past.length) g += '<path d="' + line(past.concat(now), 'mid') + '" fill="none" stroke="' + color + '" stroke-width="2"/>';
+    now.forEach(function (x) { g += '<circle cx="' + X(x.m).toFixed(1) + '" cy="' + Y(x.mid).toFixed(1) + '" r="3.5" fill="' + color + '"/>'; });
+    if (cap) g += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(cap).toFixed(1) + '" y2="' + Y(cap).toFixed(1) +
+      '" stroke="var(--warn)" stroke-width="1.5" stroke-dasharray="5 4"/><text x="' + (W - R) + '" y="' + (Y(cap) - 3).toFixed(1) +
+      '" text-anchor="end" class="cap">容量 ' + cap + '</text>';
+    // 目もり: 上下の数字と、最初・いま・最後の月
+    var ticks = [lo, Math.round((lo + hi) / 2), hi].map(function (v) {
+      return '<text x="' + (L - 4) + '" y="' + (Y(v) + 4).toFixed(1) + '" text-anchor="end">' + v + '</text>' +
+        '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(v).toFixed(1) + '" y2="' + Y(v).toFixed(1) + '" class="grid"/>';
+    }).join('');
+    var mk = [months[0], now.length ? now[0].m : null, months[months.length - 1]].filter(Boolean).map(function (m, i) {
+      var lab = m.slice(2, 4) + '/' + (+m.slice(5));
+      return '<text x="' + X(m).toFixed(1) + '" y="' + (H - 5) + '" text-anchor="' + (i === 0 ? 'start' : i === 2 ? 'end' : 'middle') + '">' + lab + '</text>';
+    }).join('');
+    var nowLine = now.length ? '<line x1="' + X(now[0].m).toFixed(1) + '" x2="' + X(now[0].m).toFixed(1) + '" y1="' + T + '" y2="' + (H - B) + '" class="grid"/>' : '';
+    var last = fut.length ? fut[fut.length - 1] : null;
+    return (label ? '<div class="small muted">' + esc(label) + (now.length ? '　いま ' + n(now[0].mid) : '') +
+      (last ? '　1年後 ' + n(last.mid) + '（' + n(last.lo) + '〜' + n(last.hi) + '）' : '') + '</div>' :
+      (now.length || last ? '<div class="small muted">' + (now.length ? 'いま ' + n(now[0].mid) : '') +
+        (last ? '　1年後 ' + n(last.mid) + '（' + n(last.lo) + '〜' + n(last.hi) + '）' : '') + '</div>' : '')) +
+      '<svg class="herd" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(label || '') + 'の移り変わり">' +
+      ticks + nowLine + g + mk + '</svg>';
+  }
+
+  function checkLine(rows) {
+    var a = rows.filter(function (r) { return r.item === '答え合わせ'; });
+    if (!a.length) return '';
+    var inside = function (k) {
+      var x = a.filter(function (r) { return r.kind === k; });
+      return x.filter(function (r) { var v = +r.note; return v >= +r.lo && v <= +r.hi; }).length + '/' + x.length;
+    };
+    return '<p class="small muted">答え合わせ（' + esc(a[0].month) + '〜' + esc(a[a.length - 1].month) +
+      '・1年前から計算して実際とくらべた。除籍の頭数だけは実際に合わせた）: 幅に入った月 経産 ' + inside('経産') +
+      '・未経産 ' + inside('未経産') + '</p>';
+  }
+
   // ------------------------------------------------------------ 道順
   function fromMail() {
     // メールのリンクから来ると #access_token=…&type=invite のように付いてくる
@@ -643,7 +772,7 @@
       showWho(s);
       return loadCows().then(function () {
         var m = location.hash.match(/^#\/cow\/(\d{10})/);
-        if (m) showCow(m[1]); else showSearch();
+        if (m) showCow(m[1]); else if (location.hash === '#/herd') showHerd(); else showSearch();
       });
     }).catch(function (err) {
       if (err.status === 401 || err.status === 403) { forget(); showLogin('もう一度ログインしてください。', true); return; }

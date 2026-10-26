@@ -126,3 +126,15 @@ button:disabled { opacity: .5; }
 .list li:last-child { border-bottom: 0; }
 .list .d { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
 .back { display: inline-block; margin: 2px 0 8px; color: var(--accent); text-decoration: none; }
+
+/* 頭数と見通し */
+.tohere {
+  display: flex; flex-direction: column; margin: 4px 0 4px; padding: 12px 14px; min-height: 44px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px; color: var(--accent);
+  text-decoration: none; font-weight: 700;
+}
+.tohere span { font-size: 13px; font-weight: 400; color: var(--muted); }
+.herd { width: 100%; height: auto; display: block; margin: 4px 0 10px; }
+.herd text { font-size: 10px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.herd text.cap { fill: var(--warn); }
+.herd .grid { stroke: var(--line); stroke-width: 1; }

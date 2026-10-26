@@ -38,9 +38,10 @@
     return s;
   }
 
-  function call(method, path, body, token) {
+  function call(method, path, body, token, extra) {
     var h = { apikey: CFG.key, 'Content-Type': 'application/json' };
     if (token) h.Authorization = 'Bearer ' + token;
+    if (extra) Object.keys(extra).forEach(function (k) { h[k] = extra[k]; });
     return fetch(CFG.url + path, { method: method, headers: h, body: body ? JSON.stringify(body) : undefined })
       .then(function (r) {
         return r.text().then(function (t) {
@@ -109,6 +110,16 @@
     return session().then(function (s) {
       if (!s) throw Object.assign(new Error('ログインが切れました'), { status: 401 });
       return call('GET', '/rest/v1/' + path, null, s.access_token);
+    });
+  }
+
+  // 箱に書く（いまは input_repro だけ。箱の決まりで、ほかの表には書けない）。
+  // 同じ id なら上書き（電波が切れて送り直しても二重にならない）
+  function upsert(table, rows) {
+    return session().then(function (s) {
+      if (!s) throw Object.assign(new Error('ログインが切れました'), { status: 401 });
+      return call('POST', '/rest/v1/' + table + '?on_conflict=id', rows, s.access_token,
+        { Prefer: 'resolution=merge-duplicates,return=minimal' });
     });
   }
 
@@ -1024,8 +1035,16 @@
     if (/^#\/cows?(\/|$)/.test(h)) return 'cows';
     if (h === '#/herd') return 'herd';
     if (h === '#/genome') return 'genome';
+    if (/^#\/repro(\/|$)/.test(h)) return 'repro';
     return 'top';
   }
+
+  // 繁殖のページ（repro.js）に渡す道具。repro.js は箱と直接は話さない
+  window.Farm = {
+    app: app, get: get, upsert: upsert, esc: esc, n: n, day: day, md: md, days: days, box: box, none: none,
+    src: src, find: function (q) { return find(q); }, byId: function () { return byId; },
+    me: function () { return (load() || {}).email || ''; }, tabOf: tabOf
+  };
   function markTab(t) {
     var nav = document.getElementById('tabs');
     if (!nav) return;
@@ -1067,10 +1086,12 @@
       return loadCows().then(function () {
         var t = tabOf();
         markTab(t);
+        app.onclick = app.oninput = null;     // 繁殖のページが付けた受け口を、ほかのページへ持ち越さない
         var m = location.hash.match(/^#\/cow\/(\d{10})/);
         if (m) showCow(m[1]);
         else if (t === 'herd') showHerd();
         else if (t === 'genome') showGenome();
+        else if (t === 'repro') window.ReproPage.show(location.hash);
         else if (t === 'cows') showSearch();
         else showTop();
       });

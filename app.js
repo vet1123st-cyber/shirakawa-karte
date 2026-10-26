@@ -60,14 +60,48 @@
     return call('POST', '/auth/v1/token?grant_type=password', { email: email, password: password }).then(keep);
   }
 
-  // 通行証は1時間で切れる。切れる1分前か、切れていたら取り直す
+  // 通行証は1時間で切れる。切れる1分前か、切れていたら取り直す。
+  // 「毎回IDとパスワードを入れる」と言われた（2026-10-26）原因になりうる2つを塞いである:
+  //   * 取り直しを同時に何本も走らせない（同じ取り直しの札は1回しか使えない。2本目が断られて全部忘れていた）
+  //   * 電波が悪くて取り直せなかっただけなら、ログインを忘れない（忘れるのは箱が「その札は無効」と言ったときだけ）
+  var refreshing = null;
   function session() {
     var s = load();
     if (!s) return Promise.resolve(null);
     if (s.expires_at - 60 > Date.now() / 1000) return Promise.resolve(s);
-    return call('POST', '/auth/v1/token?grant_type=refresh_token', { refresh_token: s.refresh_token })
-      .then(keep)
-      .catch(function () { forget(); return null; });
+    if (!refreshing) {
+      refreshing = call('POST', '/auth/v1/token?grant_type=refresh_token', { refresh_token: s.refresh_token })
+        .then(keep)
+        .catch(function (err) {
+          if (err.status === 400 || err.status === 401 || err.status === 403) { forget(); return null; }
+          throw err;                                  // 電波のせい。ログインはそのまま
+        })
+        .then(function (x) { refreshing = null; return x; }, function (e) { refreshing = null; throw e; });
+    }
+    return refreshing;
+  }
+
+  // 読んだものを端末に控える（台帳と、開いた牛のカルテ）。次に開くときは控えをすぐ出し、裏で新しくする。
+  // ログアウトしたら消す
+  var MEMO = 'karte.memo.v1.';
+  function memo(k, v) {
+    try {
+      if (v === undefined) return JSON.parse(localStorage.getItem(MEMO + k) || 'null');
+      localStorage.setItem(MEMO + k, JSON.stringify({ at: Date.now(), v: v }));
+      var list = JSON.parse(localStorage.getItem(MEMO + 'list') || '[]').filter(function (x) { return x !== k; });
+      list.unshift(k);
+      // 牛のカルテは新しい40頭まで（端末の置き場を食いつぶさない）
+      list.filter(function (x) { return x.indexOf('cow.') === 0; }).slice(40).forEach(function (x) {
+        localStorage.removeItem(MEMO + x);
+        list = list.filter(function (y) { return y !== x; });
+      });
+      localStorage.setItem(MEMO + 'list', JSON.stringify(list));
+    } catch (e) { return null; /* 控えが無くても使える */ }
+  }
+  function forgetMemo() {
+    try {
+      Object.keys(localStorage).forEach(function (k) { if (k.indexOf(MEMO) === 0) localStorage.removeItem(k); });
+    } catch (e) { /* 同上 */ }
   }
 
   function get(path) {
@@ -175,6 +209,7 @@
     document.getElementById('out').onclick = function () {
       var t = s.access_token;
       forget();
+      forgetMemo();
       cows = null;
       call('POST', '/auth/v1/logout', {}, t).catch(function () { /* 消えていてもよい */ });
       showLogin('ログアウトしました。');
@@ -182,15 +217,23 @@
   }
 
   // ------------------------------------------------------------ 画面: さがす
+  // 台帳（528頭・約140KB・1秒ほど）。端末の控えがあれば待たずにそれを使い、裏で読み直す
+  var COW_Q = 'cow?select=cow_id,mgmt_no,name,birth_date,status,status_date,sex,breed,dam_cow_id,dam_mgmt_no,sire_name_raw&order=mgmt_no.asc';
+  function setCows(rows) {
+    cows = rows || [];
+    byId = {};
+    cows.forEach(function (c) { byId[c.cow_id] = c; });
+    return cows;
+  }
   function loadCows() {
     if (cows) return Promise.resolve(cows);
-    return get('cow?select=cow_id,mgmt_no,name,birth_date,status,status_date,sex,breed,dam_cow_id,dam_mgmt_no,sire_name_raw&order=mgmt_no.asc')
-      .then(function (rows) {
-        cows = rows || [];
-        byId = {};
-        cows.forEach(function (c) { byId[c.cow_id] = c; });
-        return cows;
-      });
+    var m = memo('cows');
+    var fresh = get(COW_Q).then(function (r) { memo('cows', r); return setCows(r); });
+    if (m && m.v && m.v.length) {
+      fresh.catch(function () { /* 控えで続ける。次に開いたときにまた読む */ });
+      return Promise.resolve(setCows(m.v));
+    }
+    return fresh;
   }
 
   function find(q) {
@@ -248,7 +291,44 @@
   function showCow(id) {
     var c = byId[id];
     if (!c) { app.innerHTML = '<a class="back" href="#/">← さがす</a>' + none('この牛は台帳にありません。'); return; }
-    app.innerHTML = '<a class="back" href="#/">← さがす</a><p class="muted">' + esc(c.mgmt_no) + ' を読んでいます…</p>';
+    // 前に開いた牛なら、控えをすぐ出す（上に「〇時〇分の控え・新しくしています」）。読めたら差し替える
+    var m = memo('cow.' + id);
+    var shown = false;
+    if (m && m.v) {
+      draw(c, m.v, '<p class="small muted" id="stale">' + md(new Date(m.at).toISOString()) + ' ' +
+        new Date(m.at).toTimeString().slice(0, 5) + ' に読んだ控えです。新しくしています…</p>');
+      shown = true;
+    } else {
+      app.innerHTML = '<a class="back" href="#/">← さがす</a><p class="muted">' + esc(c.mgmt_no) + ' を読んでいます…</p>';
+    }
+    // 1回で1頭ぶん全部（箱の関数 karte）。箱がまだ古くて関数が無いときだけ、表ごとに読む
+    get('rpc/karte?p_cow=' + encodeURIComponent(id))
+      .then(function (d) {
+        if (location.hash !== '#/cow/' + id) return;
+        memo('cow.' + id, d);
+        draw(c, d, '');
+        if (!shown) window.scrollTo(0, 0);
+      })
+      .catch(function (err) {
+        if (location.hash !== '#/cow/' + id) return;
+        if (err.status === 404) { oneByOne(c, id); return; }
+        var s = document.getElementById('stale');
+        if (s) { s.className = 'msg err'; s.textContent = '電波が悪く新しくできませんでした。下は前に読んだ控えです（' + err.message + '）'; return; }
+        app.innerHTML = '<a class="back" href="#/">← さがす</a><p class="msg err">読めませんでした（' + esc(err.message) + '）。電波を確かめて、開き直してください。</p>';
+      });
+  }
+
+  function draw(c, d, top) {
+    var names = Object.keys(d);
+    // どれか読めなかったら、上にはっきり出す（空の欄を「記録が無い」と読み違えないように）
+    var bad = names.filter(function (k) { return d[k] && d[k]._err; });
+    app.innerHTML = '<a class="back" href="#/">← さがす</a>' + top +
+      (bad.length ? '<p class="msg err">一部が読めませんでした（' + esc(bad.join('・')) + '）。開き直してください。</p>' : '') +
+      card(c, d);
+  }
+
+  // 箱に karte 関数が無い（箱の表.sql を流し直す前）ときの読み方。表ごとに16回
+  function oneByOne(c, id) {
     var q = 'cow_id=eq.' + encodeURIComponent(id);
     var want = {
       roster: 'roster?' + q + '&order=snap_date.desc',
@@ -273,11 +353,7 @@
         if (location.hash !== '#/cow/' + id) return;     // 読んでいる間に別の牛へ移った
         var d = {};
         names.forEach(function (k, i) { d[k] = res[i]; });
-        // どれか読めなかったら、上にはっきり出す（空の欄を「記録が無い」と読み違えないように）
-        var bad = names.filter(function (k) { return d[k] && d[k]._err; });
-        app.innerHTML = '<a class="back" href="#/">← さがす</a>' +
-          (bad.length ? '<p class="msg err">一部が読めませんでした（' + esc(bad.join('・')) + '）。開き直してください。</p>' : '') +
-          card(c, d);
+        draw(c, d, '');
         window.scrollTo(0, 0);
       });
   }

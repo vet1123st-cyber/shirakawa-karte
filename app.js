@@ -1,4 +1,5 @@
-// 個体カルテ — 4桁を打つと、その牛の「いま」と「これまで」が1枚で出る。
+// 白川Farm — トップ（ロボット・繁殖の数字）／個体（4桁を打つと、その牛の「いま」と「これまで」が1枚で出る）／頭数。
+// 2026-10-26 に「個体カルテ」から名前を変えた（住所 shirakawa-karte はそのまま。ホーム画面に置いた入口が切れないように）。
 //
 // データはクラウドの箱（Supabase）から読むだけ。箱は PC の farm.db の写しで、毎朝 PC が送っている。
 // 読めるのは、箱の「牧場の人」（farm_member）に入っている人だけ（箱の側の鍵＝RLS で守っている）。
@@ -153,9 +154,11 @@
   // ------------------------------------------------------------ 画面: ログイン
   function showLogin(msg, isErr) {
     who.innerHTML = '';
+    var nav = document.getElementById('tabs');
+    if (nav) nav.hidden = true;
     app.innerHTML =
       '<form class="form" id="f">' +
-      '<p>白川牧場の個体カルテです。招待されたメールアドレスとパスワードで入ってください。</p>' +
+      '<p>白川Farm（白川牧場の牛と頭数の記録）です。招待されたメールアドレスとパスワードで入ってください。</p>' +
       '<label for="em">メールアドレス</label><input id="em" type="email" autocomplete="username" required>' +
       '<label for="pw">パスワード</label><input id="pw" type="password" autocomplete="current-password" required>' +
       '<button type="submit">ログイン</button>' +
@@ -266,7 +269,6 @@
 
   function showSearch() {
     app.innerHTML =
-      '<a class="tohere" href="#/herd">頭数と1年先の見通し<span>区画ごと・容量とくらべる →</span></a>' +
       '<div class="search"><input id="q" type="search" inputmode="numeric" pattern="[0-9]*" ' +
       'placeholder="4桁" autocomplete="off" aria-label="牛の4桁の番号"></div><ul class="hits" id="hits"></ul>' +
       '<p class="small muted" id="cnt"></p>';
@@ -291,7 +293,7 @@
   // ------------------------------------------------------------ 画面: 1頭のカルテ
   function showCow(id) {
     var c = byId[id];
-    if (!c) { app.innerHTML = '<a class="back" href="#/">← さがす</a>' + none('この牛は台帳にありません。'); return; }
+    if (!c) { app.innerHTML = '<a class="back" href="#/cows">← さがす</a>' + none('この牛は台帳にありません。'); return; }
     // 前に開いた牛なら、控えをすぐ出す（上に「〇時〇分の控え・新しくしています」）。読めたら差し替える
     var m = memo('cow.' + id);
     var shown = false;
@@ -300,7 +302,7 @@
         new Date(m.at).toTimeString().slice(0, 5) + ' に読んだ控えです。新しくしています…</p>');
       shown = true;
     } else {
-      app.innerHTML = '<a class="back" href="#/">← さがす</a><p class="muted">' + esc(c.mgmt_no) + ' を読んでいます…</p>';
+      app.innerHTML = '<a class="back" href="#/cows">← さがす</a><p class="muted">' + esc(c.mgmt_no) + ' を読んでいます…</p>';
     }
     // 1回で1頭ぶん全部（箱の関数 karte）。箱がまだ古くて関数が無いときだけ、表ごとに読む
     get('rpc/karte?p_cow=' + encodeURIComponent(id))
@@ -315,7 +317,7 @@
         if (err.status === 404) { oneByOne(c, id); return; }
         var s = document.getElementById('stale');
         if (s) { s.className = 'msg err'; s.textContent = '電波が悪く新しくできませんでした。下は前に読んだ控えです（' + err.message + '）'; return; }
-        app.innerHTML = '<a class="back" href="#/">← さがす</a><p class="msg err">読めませんでした（' + esc(err.message) + '）。電波を確かめて、開き直してください。</p>';
+        app.innerHTML = '<a class="back" href="#/cows">← さがす</a><p class="msg err">読めませんでした（' + esc(err.message) + '）。電波を確かめて、開き直してください。</p>';
       });
   }
 
@@ -323,7 +325,7 @@
     var names = Object.keys(d);
     // どれか読めなかったら、上にはっきり出す（空の欄を「記録が無い」と読み違えないように）
     var bad = names.filter(function (k) { return d[k] && d[k]._err; });
-    app.innerHTML = '<a class="back" href="#/">← さがす</a>' + top +
+    app.innerHTML = '<a class="back" href="#/cows">← さがす</a>' + top +
       (bad.length ? '<p class="msg err">一部が読めませんでした（' + esc(bad.join('・')) + '）。開き直してください。</p>' : '') +
       card(c, d);
   }
@@ -431,6 +433,10 @@
 
   function stat(label, val, sub) {
     return '<div class="stat"><div class="label">' + esc(label) + '</div><div class="val">' + esc(val) + '</div><div class="sub">' + esc(sub) + '</div></div>';
+  }
+  // 数字の横に小さく単位を付けたいとき（val は数字と単位だけを組んだ HTML。人の書いた文字は入れない）
+  function statH(label, valHtml, sub) {
+    return '<div class="stat"><div class="label">' + esc(label) + '</div><div class="val">' + valHtml + '</div><div class="sub">' + esc(sub) + '</div></div>';
   }
 
   function reproBox(c, ro, repro, calv, heifer) {
@@ -612,28 +618,152 @@
     }).join('') + '</ul>' + src('哺乳アプリ'));
   }
 
+  // ------------------------------------------------------------ 画面: トップ
+  // PC の farm_summary.py が毎朝計算して箱の farm_summary 表に置く（ロボットの群の平均・授精率・妊娠率・受胎率）
+  function showTop() {
+    loadPage('top', 'top', 'farm_summary?select=section,key,date,value,n,note&order=date.asc', drawTop);
+  }
+
+  function pick(rows, sec, key) {
+    return rows.filter(function (r) { return r.section === sec && r.key === key; })
+      .map(function (r) { return { d: r.date, v: r.value == null ? null : +r.value, n: r.n, note: r.note }; });
+  }
+
+  function drawTop(rows, top) {
+    var set = {};
+    rows.filter(function (r) { return r.section === '設定'; }).forEach(function (r) { set[r.key] = r.note; });
+    var html = top + '<div class="head"><div class="name"><b>白川牧場</b></div><div class="id">' +
+      (set['計算日'] ? day(set['計算日']) + ' に計算' : '') + '</div></div>';
+    html += robotTop(rows);
+    html += reproTop(rows);
+    html += box('決めごと', '<dl class="kv">' + Object.keys(set).filter(function (k) { return k !== '計算日'; }).map(function (k) {
+      return '<dt>' + esc(k.replace('の決め方', '')) + '</dt><dd class="small">' + esc(set[k]) + '</dd>';
+    }).join('') + '</dl>');
+    app.innerHTML = html;
+  }
+
+  function robotTop(rows) {
+    var milk = pick(rows, 'ロボット', '日乳量');
+    if (!milk.length) return box('ロボット', none('まだ記録がありません。'));
+    var last = milk[milk.length - 1];
+    var wk = milk.slice(-8, -1).map(function (x) { return x.v; });
+    var base = avg(wk);
+    var diff = base == null ? null : last.v - base;
+    var cell = function (key, unit, dg) {
+      var s = pick(rows, 'ロボット', key);
+      if (!s.length) return '';
+      var l = s[s.length - 1], b = avg(s.slice(-8, -1).map(function (x) { return x.v; }));
+      return statH(key, n(l.v, dg) + '<span class="small">' + unit + '</span>',
+        b == null ? '' : '前の7日 ' + n(b, dg));
+    };
+    return box('ロボット（' + md(last.d) + '）',
+      '<div class="stats"><div class="stat"><div class="label">日乳量（1頭）</div><div class="val big">' + n(last.v, 1) +
+      '<span class="small">kg</span></div><div class="sub">' + (diff == null ? '' : (diff >= 0 ? '+' : '') + n(diff, 1) + ' kg（前の7日とくらべて）') +
+      '</div></div>' + cell('頭数', '頭', 0) + cell('搾乳回数', '回', 2) + '</div>' +
+      trend([{ name: '日乳量', color: 'var(--spark)', pts: milk }], 'kg') +
+      '<div class="stats">' + cell('反芻時間', '分', 0) + cell('リフューズ', '', 2) + cell('失敗', '', 2) + '</div>' +
+      src('レリー Horizon「搾乳可能牛」（搾乳している牛だけの平均。毎朝）'));
+  }
+
+  function reproTop(rows) {
+    var hdr = pick(rows, '繁殖', '授精率'), pr = pick(rows, '繁殖', '妊娠率');
+    // 授精が5回に満たない月は線に入れない（2回で 0% のように大きく振れるため）
+    var enough = function (p) { return (p.n || 0) >= 5; };
+    var cp = pick(rows, '繁殖', '受胎率（経産）').filter(enough), ch = pick(rows, '繁殖', '受胎率（未経産）').filter(enough);
+    if (!hdr.length) return box('繁殖', none('まだ計算されていません。'));
+    var lastOf = function (s) { var x = s.filter(function (p) { return p.v != null; }); return x[x.length - 1]; };
+    var mean = function (s) { var x = s.filter(function (p) { return p.v != null; }); return x.length ? avg(x.map(function (p) { return p.v; })) : null; };
+    var wsum = function (s, k) {          // 直近 k か月の受胎率（回数で重みづけ）
+      var x = s.slice(-k), nn = x.reduce(function (a, p) { return a + (p.n || 0); }, 0);
+      return nn ? { v: x.reduce(function (a, p) { return a + p.v * p.n; }, 0) / nn, n: nn } : null;
+    };
+    var h = lastOf(hdr), p = lastOf(pr), c3 = wsum(cp, 3), h3 = wsum(ch, 3);
+    return box('繁殖（経産・21日ごと）',
+      '<div class="stats">' +
+      statH('授精率', h ? n(h.v, 0) + '<span class="small">%</span>' : '—', h ? md(h.d) + '〜の21日・対象' + h.n + '頭' : '') +
+      statH('妊娠率', p ? n(p.v, 0) + '<span class="small">%</span>' : '—', p ? md(p.d) + '〜・1年平均 ' + n(mean(pr), 1) + '%' : '') +
+      statH('受胎率', c3 ? n(c3.v, 0) + '<span class="small">%</span>' : '—', c3 ? '直近3か月・' + c3.n + '回' + (h3 ? '／未経産 ' + n(h3.v, 0) + '%' : '') : '') +
+      '</div>' +
+      trend([{ name: '授精率', color: 'var(--spark2)', pts: hdr }, { name: '妊娠率', color: 'var(--spark)', pts: pr }], '%') +
+      '<p class="small muted">妊娠率は直近およそ3か月、授精率は直近およそ5週間はまだ出ません（妊娠したかがまだ分からない・TAF への授精の報告待ち）。灰色の部分がそこで、0% ではありません。</p>' +
+      trend([{ name: '受胎率（経産）', color: 'var(--spark)', pts: cp }, { name: '受胎率（未経産）', color: 'var(--spark2)', pts: ch }], '%', true) +
+      src('TAF 繁殖のCSV（授精・分娩）と在籍牛一覧の分娩予定日'));
+  }
+
+  // 日付で並んだ線（いくつでも）。値が空の点は線を切り、終わりの空の区間は薄く塗る
+  function trend(series, unit, monthly) {
+    var ds = [];
+    series.forEach(function (s) { s.pts.forEach(function (p) { if (ds.indexOf(p.d) < 0) ds.push(p.d); }); });
+    ds.sort();
+    if (ds.length < 2) return '';
+    var vals = [];
+    series.forEach(function (s) { s.pts.forEach(function (p) { if (p.v != null) vals.push(p.v); }); });
+    if (!vals.length) return '';
+    var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+    var pad = (hi - lo) * 0.15 || 1;
+    lo = Math.max(0, Math.floor(lo - pad)); hi = Math.ceil(hi + pad);
+    var W = 320, H = 120, L = 28, R = 6, T = 8, B = 20;
+    var X = function (d) { return L + ds.indexOf(d) / (ds.length - 1) * (W - L - R); };
+    var Y = function (v) { return T + (1 - (v - lo) / (hi - lo)) * (H - T - B); };
+    var g = '';
+    // 終わりの「まだ分からない」区間
+    var known = [];
+    series.forEach(function (s) { s.pts.forEach(function (p) { if (p.v != null) known.push(p.d); }); });
+    var lastKnown = known.sort()[known.length - 1];
+    if (lastKnown && lastKnown < ds[ds.length - 1]) {
+      g += '<rect x="' + X(lastKnown).toFixed(1) + '" y="' + T + '" width="' + (X(ds[ds.length - 1]) - X(lastKnown)).toFixed(1) +
+        '" height="' + (H - T - B) + '" class="unknown"/>';
+    }
+    series.forEach(function (s) {
+      var d = '', on = false;
+      s.pts.forEach(function (p) {
+        if (p.v == null) { on = false; return; }
+        d += (on ? 'L' : 'M') + X(p.d).toFixed(1) + ' ' + Y(p.v).toFixed(1) + ' ';
+        on = true;
+      });
+      g += '<path d="' + d + '" fill="none" stroke="' + s.color + '" stroke-width="2"/>';
+    });
+    var ticks = [lo, Math.round((lo + hi) / 2), hi].map(function (v) {
+      return '<text x="' + (L - 4) + '" y="' + (Y(v) + 4).toFixed(1) + '" text-anchor="end">' + v + '</text>' +
+        '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(v).toFixed(1) + '" y2="' + Y(v).toFixed(1) + '" class="grid"/>';
+    }).join('');
+    var lab = function (d) { return monthly ? d.slice(2, 4) + '/' + (+d.slice(5, 7)) : md(d); };
+    var mk = '<text x="' + L + '" y="' + (H - 5) + '" text-anchor="start">' + lab(ds[0]) + '</text>' +
+      '<text x="' + (W - R) + '" y="' + (H - 5) + '" text-anchor="end">' + lab(ds[ds.length - 1]) + '</text>';
+    var legend = series.length > 1 ? '<div class="legend">' + series.map(function (s) {
+      return '<span><i style="background:' + s.color + '"></i>' + esc(s.name) + '</span>';
+    }).join('') + '</div>' : '';
+    return legend + '<svg class="herd" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' +
+      esc(series.map(function (s) { return s.name; }).join('・')) + '（' + esc(unit) + '）の移り変わり">' + ticks + g + mk + '</svg>';
+  }
+
   // ------------------------------------------------------------ 画面: 頭数と見通し（段階3）
   // PC の herd_outlook.py が毎朝計算して箱の herd_outlook 表に置く。ここは読んで描くだけ（計算はしない）。
   //   kind 実際（過去13か月の月末）／いま／見通し（1年先。lo〜hi は300回くり返したうちの下10%〜上10%）／設定
   var ROOMS = ['搾乳（ロボット）', 'つなぎ', '乾乳前期', '分娩舎', '哺乳・D型', '育成舎'];
-  function showHerd() {
-    var m = memo('herd');
-    if (m && m.v) drawHerd(m.v, '<p class="small muted" id="stale">' + md(new Date(m.at).toISOString()) + ' ' +
+  // まとめの画面（トップ・頭数…）の読み方。控えがあればすぐ出し、裏で新しくする
+  function loadPage(tab, memoKey, path, draw) {
+    var m = memo(memoKey);
+    if (m && m.v) draw(m.v, '<p class="small muted" id="stale">' + md(new Date(m.at).toISOString()) + ' ' +
       new Date(m.at).toTimeString().slice(0, 5) + ' に読んだ控えです。新しくしています…</p>');
-    else app.innerHTML = '<a class="back" href="#/">← さがす</a><p class="muted">読んでいます…</p>';
-    get('herd_outlook?select=item,month,kind,lo,mid,hi,cap,note&order=month.asc')
+    else app.innerHTML = '<p class="muted pad">読んでいます…</p>';
+    get(path)
       .then(function (r) {
-        if (location.hash !== '#/herd') return;
-        memo('herd', r);
-        drawHerd(r, '');
+        if (tabOf() !== tab) return;
+        memo(memoKey, r);
+        draw(r, '');
       })
       .catch(function (err) {
-        if (location.hash !== '#/herd') return;
+        if (tabOf() !== tab) return;
         var s = document.getElementById('stale');
         if (s) { s.className = 'msg err'; s.textContent = '新しくできませんでした。下は前に読んだ控えです（' + err.message + '）'; return; }
-        app.innerHTML = '<a class="back" href="#/">← さがす</a><p class="msg err">読めませんでした（' + esc(err.message) +
-          '）。' + (err.status === 404 ? '箱にまだ「頭数」の表がありません（佐藤さんが箱の表を流し直すと出ます）。' : '電波を確かめて、開き直してください。') + '</p>';
+        app.innerHTML = '<p class="msg err">読めませんでした（' + esc(err.message) + '）。' +
+          (err.status === 404 ? '箱にまだこの表がありません（佐藤さんが箱の表を流し直すと出ます）。' : '電波を確かめて、開き直してください。') + '</p>';
       });
+  }
+
+  function showHerd() {
+    loadPage('herd', 'herd', 'herd_outlook?select=item,month,kind,lo,mid,hi,cap,note&order=month.asc', drawHerd);
   }
 
   function series(rows, item) {
@@ -643,10 +773,10 @@
   }
 
   function drawHerd(rows, top) {
-    if (!rows.length) { app.innerHTML = '<a class="back" href="#/">← さがす</a>' + top + none('まだ計算されていません。'); return; }
+    if (!rows.length) { app.innerHTML = top + none('まだ計算されていません。'); return; }
     var set = {};
     rows.filter(function (r) { return r.item === '設定'; }).forEach(function (r) { set[r.month] = r.note; });
-    var html = '<a class="back" href="#/">← さがす</a>' + top +
+    var html = top +
       '<div class="head"><div class="name"><b>頭数と1年先の見通し</b></div>' +
       '<div class="id">' + day(set['計算日']) + ' に計算。線は真ん中、帯は「ありそうな幅」（300回くり返した下10%〜上10%）</div></div>';
     html += box('いま と 1年先', roomTable(rows) + src('TAF（在籍・繁殖・異動のCSV、在籍牛一覧）・レリー（つなぎの頭数）'));
@@ -741,6 +871,22 @@
   }
 
   // ------------------------------------------------------------ 道順
+  // 下のタブ: トップ（#/）・個体（#/cows と #/cow/…）・頭数（#/herd）
+  function tabOf() {
+    var h = location.hash;
+    if (/^#\/cows?(\/|$)/.test(h)) return 'cows';
+    if (h === '#/herd') return 'herd';
+    return 'top';
+  }
+  function markTab(t) {
+    var nav = document.getElementById('tabs');
+    if (!nav) return;
+    nav.hidden = false;
+    [].forEach.call(nav.querySelectorAll('a'), function (a) {
+      a.className = a.getAttribute('data-tab') === t ? 'on' : '';
+    });
+  }
+
   function fromMail() {
     // メールのリンクから来ると #access_token=…&type=invite のように付いてくる
     var h = location.hash.slice(1);
@@ -771,8 +917,13 @@
       if (!s) { showLogin(); return; }
       showWho(s);
       return loadCows().then(function () {
+        var t = tabOf();
+        markTab(t);
         var m = location.hash.match(/^#\/cow\/(\d{10})/);
-        if (m) showCow(m[1]); else if (location.hash === '#/herd') showHerd(); else showSearch();
+        if (m) showCow(m[1]);
+        else if (t === 'herd') showHerd();
+        else if (t === 'cows') showSearch();
+        else showTop();
       });
     }).catch(function (err) {
       if (err.status === 401 || err.status === 403) { forget(); showLogin('もう一度ログインしてください。', true); return; }

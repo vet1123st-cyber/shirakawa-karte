@@ -186,6 +186,10 @@ button.wide { width: 100%; margin-top: 10px; min-height: 52px; font-size: 17px; 
 #rq, #eq { width: 100%; font-size: 24px; text-align: center; letter-spacing: .1em; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink); }
 .head .no + .id { margin-top: 4px; }
 
+/* レリーの名前（a077）。4桁のすぐ横に小さく */
+.lely { font-size: .55em; font-weight: 600; color: var(--muted); margin-left: .35em; letter-spacing: 0; vertical-align: .15em; }
+.hits .no .lely, .rowlink .lely, .list .lely, b .lely { font-size: .75em; vertical-align: 0; }
+
 /* 下のタブ（親指で押せる位置） */
 main { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
 .tabs {

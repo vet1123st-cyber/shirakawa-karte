@@ -145,6 +145,11 @@
   function id10(c) { return c ? c.slice(0, 5) + '-' + c.slice(5, 9) + '-' + c.slice(9) : ''; }
   function avg(a) { var x = a.filter(function (v) { return v != null && v !== ''; }).map(Number); return x.length ? x.reduce(function (s, v) { return s + v; }, 0) / x.length : null; }
   function src(text) { return '<div class="src">出どころ: ' + esc(text) + '</div>'; }
+  // 4桁とレリーの名前（a077 など）を並べる。現場は両方で呼ぶ（2026-10-28 本人）。ロボットに居ない牛は4桁だけ
+  function no(c) {
+    c = c || {};
+    return esc(c.mgmt_no || '----') + (c.lely_name ? '<span class="lely">' + esc(c.lely_name) + '</span>' : '');
+  }
   function box(title, inner) { return '<section class="box"><h3>' + esc(title) + '</h3>' + inner + '</section>'; }
   function none(text) { return '<p class="none">' + esc(text) + '</p>'; }
 
@@ -232,7 +237,7 @@
 
   // ------------------------------------------------------------ 画面: さがす
   // 台帳（528頭・約140KB・1秒ほど）。端末の控えがあれば待たずにそれを使い、裏で読み直す
-  var COW_Q = 'cow?select=cow_id,mgmt_no,name,birth_date,status,status_date,sex,breed,dam_cow_id,dam_mgmt_no,sire_name_raw&order=mgmt_no.asc';
+  var COW_Q = 'cow?select=cow_id,mgmt_no,name,birth_date,status,status_date,sex,breed,dam_cow_id,dam_mgmt_no,sire_name_raw,lely_name&order=mgmt_no.asc';
   function setCows(rows) {
     cows = rows || [];
     byId = {};
@@ -251,6 +256,12 @@
   }
 
   function find(q) {
+    // レリーの名前（a077）でも探せる。いま居る牛の中から
+    var lq = (q || '').trim().toLowerCase();
+    if (/^a\d+$/.test(lq)) {
+      return cows.filter(function (c) { return (c.lely_name || '').toLowerCase().indexOf(lq) === 0 && c.status === '在籍'; })
+        .sort(function (a, b) { return (a.lely_name || '').localeCompare(b.lely_name || ''); }).slice(0, 30);
+    }
     q = (q || '').replace(/\D/g, '');
     if (!q) return [];
     var hit = cows.filter(function (c) {
@@ -271,7 +282,7 @@
   function hitRow(c) {
     var here = c.status === '在籍';
     return '<li><a href="#/cow/' + c.cow_id + '"' + (here ? '' : ' class="gone"') + '>' +
-      '<span class="no">' + esc(c.mgmt_no || '----') + '</span><span>' +
+      '<span class="no">' + no(c) + '</span><span>' +
       (here ? '' : '<span class="small">' + esc(id10(c.cow_id)) + (c.name ? '・' : '') + '</span>') +
       esc(c.name || '') + '<br><span class="small muted">' + day(c.birth_date) + '生・' +
       (here ? '在籍' : '居ない（' + (c.status_date ? day(c.status_date) + 'ごろまで' : '時期不明') + '）') +
@@ -286,7 +297,7 @@
     var q = document.getElementById('q');
     var hits = document.getElementById('hits');
     var here = cows.filter(function (c) { return c.status === '在籍'; }).length;
-    document.getElementById('cnt').textContent = '台帳 ' + cows.length + ' 頭（在籍 ' + here + ' 頭）。4桁の一部でも出ます。';
+    document.getElementById('cnt').textContent = '台帳 ' + cows.length + ' 頭（在籍 ' + here + ' 頭）。4桁の一部でも、レリーの名前（a077 など）でも出ます。';
     // 候補の欄だけを差し替える。画面ぜんぶを描き直すと入力欄が外れて続けて打てない
     q.oninput = function () { hits.innerHTML = find(q.value).map(hitRow).join(''); };
     q.onkeydown = function (e) {
@@ -393,7 +404,7 @@
     rows(d.sale).forEach(function (s) {
       chips.push('<span class="chip out">' + esc(s.kind) + ' ' + day(s.date) + '</span>');
     });
-    var out = '<div class="head"><div class="no">' + esc(c.mgmt_no || '----') + '</div>' +
+    var out = '<div class="head"><div class="no">' + no(c) + '</div>' +
       '<div class="id">' + esc(id10(c.cow_id)) + '・' + day(c.birth_date) + '生</div>' +
       (c.name ? '<div class="name">' + esc(c.name) + '</div>' : '') +
       '<div class="chips">' + chips.join('') + '</div></div>';
@@ -889,7 +900,7 @@
     return box('個体の順位（' + esc(m.label) + '）', '<ul class="list">' + list.map(function (x, i) {
       var c = x.c, row = byId[c.id];
       return '<li><a class="rowlink" href="#/cow/' + esc(c.id) + '"><span class="no">' + (i + 1) + '</span>' +
-        '<span><b>' + esc(c.mgmt || '----') + '</b> <span class="small muted">' + esc(c.birth ? c.birth.slice(0, 4) + '年生' : '') +
+        '<span><b>' + no(row || { mgmt_no: c.mgmt }) + '</b> <span class="small muted">' + esc(c.birth ? c.birth.slice(0, 4) + '年生' : '') +
         (row && row.status !== '在籍' ? '・居ない' : '') + '</span></span><span class="v">' + gfmt(trait, x.v) +
         '<span class="small muted">　全国 ' + pctTxt(E.pctNational(trait, x.v)) + '</span></span></a></li>';
     }).join('') + '</ul><p class="small muted">押すとその牛のカルテ。</p>');
@@ -1044,6 +1055,8 @@
   window.Farm = {
     app: app, get: get, upsert: upsert, esc: esc, n: n, day: day, md: md, days: days, box: box, none: none,
     src: src, find: function (q) { return find(q); }, byId: function () { return byId; },
+    // 牛の番号の出し方（4桁＋レリーの名前）。id（10桁）か、mgmt_no を持つものを渡す
+    no: function (x, fallback) { return no(typeof x === 'string' ? (byId[x] || { mgmt_no: fallback }) : x); },
     me: function () { return (load() || {}).email || ''; }, tabOf: tabOf, trend: function (s, u, l) { return trend(s, u, l); }
   };
   function markTab(t) {

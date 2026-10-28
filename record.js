@@ -51,7 +51,7 @@
     if (q) {
       q.oninput = function () {
         document.getElementById('chits').innerHTML = F.find(q.value).slice(0, 8).map(function (c) {
-          return '<li><a href="#" data-cow="' + c.cow_id + '"><span class="no">' + F.esc(c.mgmt_no || '----') + '</span><span>' +
+          return '<li><a href="#" data-cow="' + c.cow_id + '"><span class="no">' + F.no(c) + '</span><span>' +
             F.esc(c.name || '') + '<br><span class="small muted">' + F.day(c.birth_date) + '生</span></span></a></li>';
         }).join('');
       };
@@ -65,7 +65,7 @@
     var led = S.cow ? (F.byId()[S.cow] || {}) : null;
     var d = S.data, html = '';
     html += F.box('牛', led
-      ? '<p><b class="big">' + F.esc(led.mgmt_no || '----') + '</b> <span class="small muted">' + F.esc(led.name || '') + '・' +
+      ? '<p><b class="big">' + F.no(led) + '</b> <span class="small muted">' + F.esc(led.name || '') + '・' +
         ageText(led.birth_date) + '</span> <button type="button" class="link" data-clear="1">別の牛</button></p><div id="cprev"></div>'
       : '<input id="cq" type="search" inputmode="numeric" pattern="[0-9]*" placeholder="4桁" autocomplete="off" aria-label="4桁"><ul class="hits" id="chits"></ul>');
     if (!led) return html;
@@ -211,7 +211,7 @@
       var what = S.sub === 'body' ? '胸囲 ' + d.chest_cm + 'cm（推定 ' + bw(d.chest_cm) + 'kg）' + (d.height_cm ? '・体高 ' + d.height_cm : '')
         : S.sub === 'bcs' ? [d.bcs != null ? 'BCS ' + Number(d.bcs).toFixed(2) : '', d.rumen_fill != null ? 'RFS ' + d.rumen_fill : ''].filter(Boolean).join('・')
         : ['upper', 'middle', 'lower', 'pan'].filter(function (k) { return d[k] != null; }).map(function (k) { return d[k]; }).join(' / ') + ' %' + (d.foam ? '・泡' + d.foam : '');
-      return '<li><span class="d">' + F.day(r.date) + '</span>　<b>' + F.esc(led ? (led.mgmt_no || '----') : r.target) + '</b> ' + F.esc(what) +
+      return '<li><span class="d">' + F.day(r.date) + '</span>　<b>' + (led ? F.no(led) : F.esc(r.target)) + '</b> ' + F.esc(what) +
         (r.sent === false ? ' <span class="small warn">送信待ち</span>' : '') +
         ' <button type="button" class="link danger" data-undo-id="' + r.id + '">取り消す</button></li>';
     }).join('') + '</ul>');

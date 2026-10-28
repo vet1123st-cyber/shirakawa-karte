@@ -272,7 +272,7 @@
                      c.days_after_ai != null ? 'AI後' + c.days_after_ai + '日' : '', c.last_semen || '',
                      c.milk_kg != null ? F.n(c.milk_kg, 1) + 'kg' : ''].filter(Boolean).join('・');
         return '<li><a href="#/repro/cow/' + c.cow_id + '"' + (got.length ? ' class="done"' : '') + '>' +
-          '<span class="no">' + F.esc(c.mgmt_no || '----') + '</span><span>' + F.esc(c.repro_status || c.reason || '') +
+          '<span class="no">' + F.no(c.cow_id, c.mgmt_no) + '</span><span>' + F.esc(c.repro_status || c.reason || '') +
           '<br><span class="small muted">' + F.esc(facts) + '</span>' +
           (got.length ? '<br><span class="small ok">✓ ' + F.esc(got.map(function (r) { return summary(r.data); }).join('｜')) + '</span>' : '') +
           '</span></a></li>';
@@ -290,7 +290,7 @@
     var q = document.getElementById('rq'), hits = document.getElementById('rhits');
     q.oninput = function () {
       hits.innerHTML = F.find(q.value).slice(0, 8).map(function (c) {
-        return '<li><a href="#/repro/cow/' + c.cow_id + '"><span class="no">' + F.esc(c.mgmt_no || '----') + '</span><span>' +
+        return '<li><a href="#/repro/cow/' + c.cow_id + '"><span class="no">' + F.no(c) + '</span><span>' +
           F.esc(c.name || '') + '<br><span class="small muted">' + F.day(c.birth_date) + '生</span></span></a></li>';
       }).join('');
     };
@@ -311,7 +311,7 @@
     if (c && c.days_after_ai) facts.push(['AI-ET後', c.days_after_ai + '日']);
     if (c && c.ai_count) facts.push(['授精回数', c.ai_count]);
     var html = '<a class="back" href="#/repro">← リスト</a>' +
-      '<div class="head"><div class="no">' + F.esc(led.mgmt_no || (c && c.mgmt_no) || '----') + '</div>' +
+      '<div class="head"><div class="no">' + F.no(S.open, c && c.mgmt_no) + '</div>' +
       '<div class="id">' + F.esc((c && (c.repro_status || c.reason)) || 'リストに無い牛') + '</div>' +
       (facts.length ? '<div class="facts">' + facts.map(function (f) {
         return '<div class="fact"><b>' + F.esc(f[1] == null ? '—' : f[1]) + '</b><span>' + f[0] + '</span></div>';
@@ -491,7 +491,7 @@
       '<div class="seg">' + ['発情', '処置'].map(function (k) {
         return '<button type="button" data-kind="' + k + '"' + (ev.kind === k ? ' class="on"' : '') + '>' + k + '</button>';
       }).join('') + '</div>' +
-      F.box('牛', (led ? '<p><b class="big">' + F.esc(led.mgmt_no || '----') + '</b> <span class="small muted">' + F.esc(led.name || '') + '</span></p>' : '') +
+      F.box('牛', (led ? '<p><b class="big">' + F.no(led) + '</b> <span class="small muted">' + F.esc(led.name || '') + '</span></p>' : '') +
         '<input id="eq" type="search" inputmode="numeric" pattern="[0-9]*" placeholder="4桁" autocomplete="off" aria-label="4桁"><ul class="hits" id="ehits"></ul>') +
       '<div class="pickers"><label class="small muted" for="rdate">日</label><input id="rdate" type="date" value="' + current.date + '"></div>' +
       '<section class="box" id="rform">' + formHtml() + '</section>' +
@@ -514,7 +514,7 @@
     var q = document.getElementById('eq'), hits = document.getElementById('ehits');
     q.oninput = function () {
       hits.innerHTML = F.find(q.value).slice(0, 8).map(function (c) {
-        return '<li><a href="#" data-cow="' + c.cow_id + '"><span class="no">' + F.esc(c.mgmt_no || '----') + '</span><span>' +
+        return '<li><a href="#" data-cow="' + c.cow_id + '"><span class="no">' + F.no(c) + '</span><span>' +
           F.esc(c.name || '') + '<br><span class="small muted">' + F.day(c.birth_date) + '生</span></span></a></li>';
       }).join('');
     };
@@ -548,7 +548,7 @@
     return F.box('最近の発情・処置', '<ul class="list">' + all.map(function (r) {
       var led = F.byId()[r.cow_id] || {}, d = r.data || {};
       var own = ids.indexOf(r.id) >= 0 || r.entered_name === me;
-      return '<li><span class="d">' + F.day(r.date) + '</span>　<b>' + F.esc(led.mgmt_no || '----') + '</b> ' + F.esc(r.kind) + '：' +
+      return '<li><span class="d">' + F.day(r.date) + '</span>　<b>' + F.no(led) + '</b> ' + F.esc(r.kind) + '：' +
         F.esc([].concat(d.detail || []).join('・')) + (d.drug ? '（' + F.esc(d.drug) + '）' : '') + (d.note ? ' ' + F.esc(d.note) : '') +
         (r.sent === false ? ' <span class="small warn">送信待ち</span>' : '') +
         (own ? ' <button type="button" class="link danger" data-undo-id="' + r.id + '">取り消す</button>' : '') + '</li>';
@@ -572,7 +572,7 @@
           '<div class="stat"><div class="label">受胎</div><div class="val">' + (done.length ? Math.round(ok / done.length * 100) + '%' : '—') + '</div><div class="sub">' + ok + '/' + done.length + '（結果の出たもの）</div></div>' +
           '<div class="stat"><div class="label">判定待ち</div><div class="val">' + y.filter(function (r) { return r.result === '判定待ち'; }).length + '</div><div class="sub">移植から90日まで</div></div></div>') +
         F.box('移植の記録', '<ul class="list">' + rows.map(function (r) {
-          return '<li><span class="d">' + F.day(r.date) + '</span>　<a href="#/cow/' + r.cow_id + '"><b>' + F.esc(r.mgmt_no || '----') + '</b></a> ' +
+          return '<li><span class="d">' + F.day(r.date) + '</span>　<a href="#/cow/' + r.cow_id + '"><b>' + F.no(r.cow_id, r.mgmt_no) + '</b></a> ' +
             F.esc(r.embryo || '') + (r.donor ? '<span class="small muted">（' + F.esc(r.donor) + '）</span>' : '') +
             (r.vet ? ' <span class="small muted">' + F.esc(r.vet) + '</span>' : '') +
             ' <span class="small ' + (cls[r.result] || '') + '">' + F.esc(r.result || '') + '</span></li>';

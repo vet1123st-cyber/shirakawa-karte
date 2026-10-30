@@ -113,6 +113,18 @@
     });
   }
 
+  function getAll(path) {
+    var out = [];
+    function next(offset) {
+      return get(path + (path.indexOf('?') >= 0 ? '&' : '?') + 'limit=1000&offset=' + offset).then(function (r) {
+        if (!Array.isArray(r)) throw new Error('一覧の形式を確認できませんでした');
+        out = out.concat(r);
+        return r.length === 1000 ? next(offset + 1000) : out;
+      });
+    }
+    return next(0);
+  }
+
   // 箱に書く（いまは input_repro だけ。箱の決まりで、ほかの表には書けない）。
   // 同じ id なら上書き（電波が切れて送り直しても二重にならない）
   function upsert(table, rows) {
@@ -236,8 +248,8 @@
   }
 
   // ------------------------------------------------------------ 画面: さがす
-  // 台帳（528頭・約140KB・1秒ほど）。端末の控えがあれば待たずにそれを使い、裏で読み直す
-  var COW_Q = 'cow?select=cow_id,mgmt_no,name,birth_date,status,status_date,sex,breed,dam_cow_id,dam_mgmt_no,sire_name_raw,lely_name&order=mgmt_no.asc';
+  // 台帳は全ページを読み終えてから表示する。通信できない時だけ日時付きの控えを使う。
+  var COW_Q = 'cow?select=*&order=mgmt_no.asc,cow_id.asc';
   function setCows(rows) {
     cows = rows || [];
     byId = {};
@@ -246,13 +258,18 @@
   }
   function loadCows() {
     if (cows) return Promise.resolve(cows);
-    var m = memo('cows');
-    var fresh = get(COW_Q).then(function (r) { memo('cows', r); return setCows(r); });
-    if (m && m.v && m.v.length) {
-      fresh.catch(function () { /* 控えで続ける。次に開いたときにまた読む */ });
-      return Promise.resolve(setCows(m.v));
-    }
-    return fresh;
+    var m = memo('cows-all-v3');
+    return getAll(COW_Q).then(function (r) { memo('cows-all-v3', r); return setCows(r); })
+      .catch(function (err) {
+        if (m && m.v && m.v.length) {
+          if (err.status === 401 || err.status === 403) throw err;
+          var msg = document.getElementById('cow-cache-notice');
+          if (!msg) { msg = document.createElement('p'); msg.id = 'cow-cache-notice'; msg.className = 'msg err'; app.parentNode.insertBefore(msg, app); }
+          msg.textContent = new Date(m.at).toLocaleString() + ' の台帳の控えです。通信を確認してください。';
+          return setCows(m.v);
+        }
+        throw err;
+      });
   }
 
   function find(q) {
@@ -350,6 +367,7 @@
     app.innerHTML = '<a class="back" href="#/cows">← さがす</a>' + top +
       (bad.length ? '<p class="msg err">一部が読めませんでした（' + esc(bad.join('・')) + '）。開き直してください。</p>' : '') +
       card(c, d);
+    if (window.Lifetime) window.Lifetime.bind(c, d);
   }
 
   // 箱に karte 関数が無い（箱の表.sql を流し直す前）ときの読み方。表ごとに16回
@@ -370,7 +388,9 @@
       weight: 'v_weight?' + q + '&order=date.asc',
       genome: 'v_genome?' + q,
       ginfo: 'v_genome_info?' + q,
-      sale: 'sale?' + q + '&order=date.asc'
+      sale: 'sale?' + q + '&order=date.asc',
+      life: 'cow_life?' + q + '&order=event_date.asc,event_key.asc',
+      issues: 'integration_issue?' + q
     };
     var names = Object.keys(want);
     Promise.all(names.map(function (k) { return get(want[k]).catch(function (e) { return { _err: e.message }; }); }))
@@ -391,12 +411,16 @@
     var robot = rows(d.robot);
     var rLast = robot[robot.length - 1] || null;
     var parity = ro && ro.parity != null ? ro.parity : (rLast ? rLast.parity : null);
+    if (parity == null || parity === '') {
+      var knownParities = rows(d.milk).concat(rows(d.lact), rows(d.calv)).map(function (r) { return r.parity; }).filter(function (p) { return p != null && p !== ''; });
+      if (knownParities.length) parity = Math.max.apply(null, knownParities);
+    }
     var here = c.status === '在籍';
-    var age = months(c.birth_date);
+    var age = here ? months(c.birth_date) : (c.status_date ? months(c.birth_date, c.status_date) : null);
     var chips = [
       '<span class="chip ' + (here ? 'on' : 'out') + '">' + (here ? '在籍' : '居ない' + (c.status_date ? '（' + day(c.status_date) + 'ごろ）' : '')) + '</span>',
-      parity != null && parity !== '' ? '<span class="chip">' + esc(parity) + '産</span>' : '<span class="chip">未経産</span>',
-      age != null ? '<span class="chip">' + n(age, 1) + 'か月</span>' : '',
+      parity != null && parity !== '' ? '<span class="chip">' + (here ? '' : '最終記録 ') + esc(parity) + '産</span>' : '<span class="chip">産次未確認</span>',
+      age != null && age >= 0 ? '<span class="chip">' + (here ? '' : '除籍時 約') + n(age, 1) + 'か月</span>' : '',
       rLast && rLast.group_no ? '<span class="chip">群 ' + esc(rLast.group_no) + '</span>' : '',
       c.sex && c.sex !== '♀' && c.sex !== '雌' ? '<span class="chip">' + esc(c.sex) + '</span>' : '',
       c.breed && !/ホル/.test(c.breed) ? '<span class="chip">' + esc(c.breed) + '</span>' : ''
@@ -405,19 +429,21 @@
       chips.push('<span class="chip out">' + esc(s.kind) + ' ' + day(s.date) + '</span>');
     });
     var out = '<div class="head"><div class="no">' + no(c) + '</div>' +
-      '<div class="id">' + esc(id10(c.cow_id)) + '・' + day(c.birth_date) + '生</div>' +
+      '<div class="id">' + (/^000000/.test(c.cow_id) ? '台帳の仮番号（耳標未確認） ' : '') + esc(id10(c.cow_id)) + '・' + (c.birth_date ? day(c.birth_date) + '生' : '生年月日未記録') + '</div>' +
       (c.name ? '<div class="name">' + esc(c.name) + '</div>' : '') +
       '<div class="chips">' + chips.join('') + '</div></div>';
 
     // 搾ったことのない牛（未経産）に、空のロボットと乳検の欄は出さない
-    var heifer = (parity == null || parity === '' || +parity === 0) && !robot.length && !rows(d.milk).length && !failed(d.robot) && !failed(d.milk);
-    out += '<h2>いま</h2>';
+    var heifer = parity != null && parity !== '' && +parity === 0 && !robot.length && !rows(d.milk).length && !failed(d.robot) && !failed(d.milk);
+    out += '<h2>' + (here ? 'いま' : '最終記録と履歴') + '</h2>';
     if (!heifer) out += robotBox(robot, d.robot);
     out += reproBox(c, ro, rows(d.repro), rows(d.calv), heifer);
     if (!heifer) out += milkBox(d.milk);
     out += healthBox(d.health);
     out += calvBox(c, d.calv);
     out += '<h2>これまで</h2>';
+    if (window.Lifetime) out += window.Lifetime.card(c, d);
+    if (!rows(d.colos).length || !rows(d.feed).length) out += '<p class="small muted">初乳・哺乳の保存記録が無い項目があります。未取得を含み、給与していないという意味ではありません。接続状況は「歩み」で確認できます。</p>';
     out += birthBox(c, rows(d.birth)[0], rows(d.births), rows(d.colos), rows(d.feed));
     out += growthBox(c, d.weight);
     out += firstBox(c, rows(d.roster), rows(d.repro), rows(d.calv));
@@ -439,8 +465,8 @@
     var inner =
       '<div class="stats">' +
       stat('日乳量', n(last.milk_kg, 1), 'kg・' + md(last.date)) +
-      stat('7日平均', n(m7, 1), diff == null ? 'kg' : 'kg（前の7日より ' + (diff >= 0 ? '+' : '') + n(diff, 1) + '）') +
-      stat('反芻', n(last.rumination_min), '分・7日 ' + n(avg(w7.map(function (r) { return r.rumination_min; }))) + '分') +
+      stat('直近7記録の平均', n(m7, 1), diff == null ? 'kg' : 'kg（前の7記録より ' + (diff >= 0 ? '+' : '') + n(diff, 1) + '）') +
+      stat('反芻', n(last.rumination_min), '分・直近7記録 ' + n(avg(w7.map(function (r) { return r.rumination_min; }))) + '分') +
       '</div>' +
       '<div class="small muted" style="margin-top:8px">日乳量（' + md(robot[0].date) + '〜' + md(last.date) + '）</div>' + spark(milk, 'var(--spark)') +
       '<div class="small muted">反芻</div>' + spark(rum, 'var(--spark2)') +
@@ -543,6 +569,10 @@
       (b && b.gestation_days ? '<dt>妊娠日数</dt><dd>' + b.gestation_days + ' 日</dd>' : '') +
       '<dt>母</dt><dd>' + (dam ? '<a href="#/cow/' + dam.cow_id + '">' + esc(dam.mgmt_no) + '</a>' : esc(c.dam_mgmt_no || '—')) + '</dd>' +
       '<dt>父</dt><dd>' + esc(c.sire_name_raw || '—') + '</dd></dl>';
+    if (c.taf_dam_cow_id) {
+      var recordedDam = byId[c.taf_dam_cow_id];
+      inner += '<dl class="kv"><dt>TAFの母牛ID</dt><dd>' + (recordedDam ? '<a href="#/cow/' + recordedDam.cow_id + '">' + no(recordedDam) + '</a>' : esc(id10(c.taf_dam_cow_id))) + '</dd></dl><p class="small muted">' + esc(c.taf_dam_role || '母区分未確認') + '。受卵牛を遺伝的母として扱いません。分娩した牛は分娩・出生原票で確認します。</p>';
+    }
     var give = colos.filter(function (r) { return String(r.kind || '').indexOf('給与') === 0; });
     var test = colos.filter(function (r) { return r.kind === '移行判定'; });
     if (give.length || test.length) {
@@ -1002,6 +1032,7 @@
     if (/^#\/cows?(\/|$)/.test(h)) return 'cows';
     if (h === '#/herd') return 'herd';
     if (h === '#/business') return 'business';
+    if (h === '#/history') return 'history';
     if (h === '#/genome') return 'genome';
     if (/^#\/repro(\/|$)/.test(h)) return 'repro';
     if (/^#\/record(\/|$)/.test(h)) return 'record';
@@ -1010,7 +1041,7 @@
 
   // 繁殖のページ（repro.js）に渡す道具。repro.js は箱と直接は話さない
   window.Farm = {
-    app: app, get: get, upsert: upsert, esc: esc, n: n, day: day, md: md, days: days, box: box, none: none,
+    app: app, get: get, all: getAll, upsert: upsert, esc: esc, n: n, day: day, md: md, days: days, box: box, none: none,
     src: src, find: function (q) { return find(q); }, byId: function () { return byId; },
     // 牛の番号の出し方（4桁＋レリーの名前）。id（10桁）か、mgmt_no を持つものを渡す
     no: function (x, fallback) { return no(typeof x === 'string' ? (byId[x] || { mgmt_no: fallback }) : x); },
@@ -1060,6 +1091,7 @@
         app.onclick = app.oninput = null;     // 繁殖のページが付けた受け口を、ほかのページへ持ち越さない
         var m = location.hash.match(/^#\/cow\/(\d{10})/);
         if (m) showCow(m[1]);
+        else if (t === 'history') window.HistoryPage.show();
         else if (t === 'business') window.BusinessPage.show();
         else if (t === 'herd') showHerd();
         else if (t === 'genome') showGenome();

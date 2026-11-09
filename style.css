@@ -365,3 +365,50 @@ main { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
 @media (max-width: 380px) { .fhead h2 { font-size: 23px; } .ftabs a { padding: 11px 13px 9px; font-size: 15px; } .fseg a { padding: 10px 13px; } }
 .badge.quick { background: #fff3c4; color: #7a5a00; }
 @media (prefers-color-scheme: dark) { .badge.quick { background: #3a3218; color: #f0d27a; } }
+/* 入力: 今回の構成比（横の積み上げ） */
+.hrow { display: grid; grid-template-columns: 4.6em 1fr; align-items: center; gap: 8px; margin: 8px 0; }
+.hlab { font-size: 13px; font-weight: 700; color: var(--muted); }
+.hb { display: flex; height: 30px; border-radius: 8px; overflow: hidden; background: var(--chip); }
+.hs { display: flex; align-items: center; justify-content: center; color: #fff; font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.s-upperb { background: var(--s-upper); } .s-middleb { background: var(--s-middle); } .s-lowerb { background: var(--s-lower); } .s-panb { background: var(--s-pan); }
+
+/* ===== 餌: iPhone で入れやすく（2026-11-09 本人「スマホ開発のプロとして」） ===== */
+/* 見出しは薄く、タブ（入力・記録・分析・設定）は上に貼りつけて、どこまで下へ送っても切り替えられる */
+.fhead { padding: 12px 20px 0; border-bottom: 0; }
+.fhead h2 { font-size: 22px; margin: 2px 0 0; }
+.fhead .fsub { font-size: 12px; margin: 2px 0 8px; }
+.ftabs { position: sticky; top: calc(48px + env(safe-area-inset-top)); z-index: 4; background: var(--fnavy);
+  margin: 0 -20px; padding: 0 16px; box-shadow: 0 4px 0 var(--fyel); }
+.ftabs a { min-height: 46px; display: flex; align-items: center; }
+/* 押しやすさ: 2度押しの拡大を止め、押した手ごたえを出す */
+.feedui a, .feedui button, .feedui select, .feedui input { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.feedui button:active, .fseg a:active, .ftabs a:active { opacity: .7; }
+.feedui .opts button { min-height: 44px; }
+.feedui button.link { min-height: 44px; padding: 10px 4px; }
+.feedui .list button.link { min-height: 36px; }
+/* 段: 行のどこを押しても入れられる。入れている段は紺の枠 */
+.feedui .step { cursor: text; border-radius: 12px; margin: 0 -8px; padding: 14px 8px 12px; }
+.feedui .step:focus-within { background: var(--fbg); box-shadow: inset 0 0 0 2px var(--fnavy); border-bottom-color: transparent; }
+.feedui .steph input:focus { outline: none; border-color: var(--fnavy); box-shadow: 0 0 0 3px rgba(45,74,124,.18); }
+.unitlink { font-size: 13px; color: var(--fmuted); margin: 0 0 2px; }
+.unitlink .link { font-size: 13px; min-height: 0 !important; padding: 4px 2px !important; }
+/* 下に固定の「残す」バー（下のタブの上）。中身が隠れないように下に余白 */
+.feedui:has(.savebar) { padding-bottom: 96px; }
+.savebar { position: fixed; left: 0; right: 0; bottom: calc(53px + env(safe-area-inset-bottom)); z-index: 5;
+  background: color-mix(in srgb, var(--fcard) 94%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  border-top: 1px solid var(--fline); padding: 8px 16px; }
+.savebar .sbrow { max-width: 688px; margin: 0 auto; display: flex; align-items: center; gap: 12px; }
+.savebar .sbinfo { flex: 1; font-size: 14px; color: var(--fmuted); font-variant-numeric: tabular-nums; }
+.savebar .sbinfo b { color: var(--fink); font-size: 17px; }
+.savebar .sbinfo .ok { color: #3f7a3a; font-weight: 700; }
+.savebar .sbbtn { background: var(--fnavy); color: #fff; font-weight: 800; font-size: 17px; min-height: 48px; min-width: 120px; border-radius: 14px; }
+.savemsg { display: none; max-width: 688px; margin: 0 auto 6px; color: var(--fred); font-size: 14px; font-weight: 700; }
+.savemsg.on { display: block; }
+/* 残したあとの知らせ（上から出て消える） */
+.ftoast { position: fixed; left: 50%; top: calc(60px + env(safe-area-inset-top)); transform: translateX(-50%); z-index: 20;
+  background: #1f2a3c; color: #fff; padding: 12px 18px; border-radius: 14px; font-size: 15px; font-weight: 700;
+  box-shadow: 0 8px 24px rgba(0,0,0,.2); transition: opacity .5s, transform .5s; max-width: calc(100% - 32px); }
+.ftoast a { color: var(--fyel); }
+.ftoast.go { opacity: 0; transform: translate(-50%, -10px); }
+.fhead { padding-bottom: 2px; }
+.ftabs { top: calc(52px + env(safe-area-inset-top)); margin: 0 -16px; padding: 0 16px; }

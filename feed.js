@@ -254,10 +254,11 @@
   // 紺の見出し（牧場・題・中身）＋ 上のタブ（入力・記録・分析・設定）＋ 黄の線 ＋ 種類の切り替え
   function head() {
     var kinds = KINDS[S.view] || [];
-    return '<header class="fhead"><p class="fco">白川牧場</p><h2>飼料・消化分析</h2><p class="fsub">PSPS ・ 糞洗い ・ TMR ・ 反芻</p>' +
+    // タブは見出しの外に置く（見出しの中だと、下へ送ったときに上に貼りつかない）
+    return '<header class="fhead"><p class="fco">白川牧場</p><h2>飼料・消化分析</h2><p class="fsub">PSPS ・ 糞洗い ・ TMR ・ 反芻</p></header>' +
       '<nav class="ftabs">' + VIEWS.map(function (v) {
         return '<a href="' + href(v[0], v[0] === S.view ? S.sub : '') + '"' + (v[0] === S.view ? ' class="on"' : '') + '>' + v[1] + '</a>';
-      }).join('') + '</nav></header>' +
+      }).join('') + '</nav>' +
       (kinds.length ? '<div class="fseg">' + kinds.map(function (k) {
         return '<a href="' + href(S.view, k[0]) + '"' + (k[0] === S.sub ? ' class="on"' : '') + '>' + k[1] + '</a>';
       }).join('') + '</div>' : '') + '<div id="rbar" class="rbar"></div>';
@@ -278,6 +279,20 @@
     Q.bar();
     F.app.onclick = onClick;
     F.app.oninput = onInput;
+    // 段の欄で「次へ／改行」を押したら次の段へ（最後の段なら閉じる）
+    // 入れる欄に入ったら、キーボードと下の「残す」バーに隠れないよう真ん中へ（キーボードが出きってから）
+    if (!F.app._feedFocus) F.app._feedFocus = F.app.addEventListener('focusin', function (e) {
+      var el = e.target;
+      if (F.tabOf() !== 'feed') return;
+      if (!el.matches || !el.matches('input[type=number],input[type=text],textarea')) return;
+      setTimeout(function () { if (document.activeElement === el) el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 300);
+    }) || true;
+    F.app.onkeydown = function (e) {
+      if (e.key !== 'Enter' || !e.target.hasAttribute || !e.target.hasAttribute('data-step-in')) return;
+      e.preventDefault();
+      var all = [].slice.call(document.querySelectorAll('[data-step-in]')), i = all.indexOf(e.target);
+      if (all[i + 1]) all[i + 1].focus(); else e.target.blur();
+    };
     F.app.onchange = onInput;
   }
 
@@ -372,7 +387,7 @@
       '<p class="small" id="tmrsum">' + tmrSum() + '</p>');
     html += F.box('メモ', textField('note', 'メモ（切り替えた理由など）', d.note)) +
       '<div class="pickers"><label class="small muted" for="rdate">給与した日</label><input id="rdate" type="date" value="' + (d.date || today()) + '"></div>' +
-      '<button type="button" class="wide" data-save="1">残す</button>';
+      saveBar();
     return html;
   }
   function tmrSum() {
@@ -420,10 +435,37 @@
   }
 
   // ---------- 糞洗い・PSPS ----------
+  // g と % の切り替えはめったに使わないので小さく（2026-11-09 iPhone で入れやすく）
   function unitSeg() {
-    return '<div class="opts">' + [['g', 'g で入れる（% は自動）'], ['pct', '% で入れる']].map(function (u) {
-      return '<button type="button" data-unit="' + u[0] + '"' + (S.unit === u[0] ? ' class="on"' : '') + '>' + u[1] + '</button>';
-    }).join('') + '</div>';
+    return '<p class="unitlink">' + (S.unit === 'g' ? 'g を入れると % が出ます。' : '% を直接入れています。') +
+      ' <button type="button" class="link" data-unit="' + (S.unit === 'g' ? 'pct' : 'g') + '">' + (S.unit === 'g' ? '% で入れる' : 'g で入れる') + '</button></p>';
+  }
+  // 画面の下に固定する「残す」バー。左に入れ具合（段がいくつ入ったか・合計）、右に残す。警告もここに出す（alert を使わない）
+  function saveBar() {
+    return '<div class="savebar"><p id="savemsg" class="savemsg" role="alert"></p><div class="sbrow"><div class="sbinfo" id="sbinfo">' + sbInfo() +
+      '</div><button type="button" class="sbbtn" data-save="1">残す</button></div></div>';
+  }
+  function sbInfo() {
+    if (S.sub === 'tmr') return tmrSum() || '原料の量を入れてください';
+    var steps = STEPS[S.sub], d = S.data, n = 0, tot = 0;
+    steps.forEach(function (st) { var v = num(d[S.unit === 'g' ? st[0] + '_g' : st[0]]); if (v !== undefined) { n++; tot += v; } });
+    return '<b>' + n + '</b>/' + steps.length + '段' + (n ? '・合計 ' + r1(tot) + (S.unit === 'g' ? ' g' : ' %') : '') +
+      (n === steps.length ? ' <span class="ok">✓</span>' : '');
+  }
+  function fail(msg, sel) {
+    var m = document.getElementById('savemsg');
+    if (m) { m.textContent = msg; m.className = 'savemsg on'; }
+    var el = typeof sel === 'string' ? document.querySelector(sel) : null;
+    if (sel === 'step') el = [].filter.call(document.querySelectorAll('[data-step-in]'), function (x) { return x.value === ''; })[0];
+    if (el) { el.focus(); el.scrollIntoView({ block: 'center' }); }
+  }
+  function toast(msg) {
+    var t = document.createElement('div');
+    t.className = 'ftoast';
+    t.innerHTML = msg;
+    document.body.appendChild(t);
+    setTimeout(function () { t.classList.add('go'); }, 2600);
+    setTimeout(function () { if (t.parentNode) t.parentNode.removeChild(t); }, 3200);
   }
   // 2026-11-09 本人「デザイン・配置はこのように」（LIG vets の飼料・消化分析アプリの画面）:
   // 段ごとに［段の名前・ふるい］［g の欄］［%］→ 目標の帯と今の位置 →「目標 ○〜○%」→ この段のメモ
@@ -436,13 +478,39 @@
       var k = S.unit === 'g' ? st[0] + '_g' : st[0];
       return '<div class="step" data-field="' + k + '"><div class="steph">' +
         '<span class="stepn s-' + st[0] + '">' + F.esc(stepName(st)) + '</span><span class="stepsz">' + F.esc(stepSize(st)) + '</span>' +
-        '<input type="number" inputmode="decimal" step="any" placeholder="0" data-text="' + k + '" value="' + F.esc(d[k] == null ? '' : d[k]) + '">' +
+        // 段の欄だけを続けて並べる（iPhone のキーボードの「∨（次へ）」で 上→中→下→受け皿 と移れる。メモは最後にまとめて）
+        '<input type="number" inputmode="decimal" step="any" placeholder="0" enterkeyhint="next" autocomplete="off" data-step-in="1" data-text="' + k + '" value="' + F.esc(d[k] == null ? '' : d[k]) + '">' +
         '<span class="pct" id="pct_' + st[0] + '">' + pctText(st[0]) + '</span></div>' +
         (useT ? '<div class="tbar" id="bar_' + st[0] + '">' + barInner(st[0]) + '</div><p class="tlabel">目標 ' + rangeText(t[st[0]]) + '</p>' : '') +
-        '<input type="text" class="stepmemo" placeholder="この段のメモ" data-text="memo_' + st[0] + '" value="' + F.esc(d['memo_' + st[0]] || '') + '">' +
         '</div>';
     }).join('') + '<p class="small" id="psum">' + sumText() + '</p>' +
-      (useT ? '' : '<p class="small muted">単味粗飼料には目標を当てていません。</p>'));
+      (useT ? '' : '<p class="small muted">単味粗飼料には目標を当てていません。</p>')) +
+      F.box('今回の構成比', '<div id="live">' + liveStack() + '</div>');
+  }
+  // 入れている回の 100%積み上げ（横の棒）。下に、同じ試料の前回を並べる（2026-11-09 本人「入力したらその画面で積み上げ棒グラフ％」）
+  function hbar(v, label) {
+    var steps = STEPS[S.sub], tot = 0;
+    steps.forEach(function (st) { tot += v[st[0]] || 0; });
+    if (!tot) return '';
+    return '<div class="hrow"><span class="hlab">' + F.esc(label) + '</span><div class="hb">' + steps.map(function (st) {
+      var w = (v[st[0]] || 0) / tot * 100;
+      return w > 0 ? '<span class="hs s-' + st[0] + 'b" style="width:' + w.toFixed(2) + '%">' + (w >= 9 ? Math.round(v[st[0]]) : '') + '</span>' : '';
+    }).join('') + '</div></div>';
+  }
+  function liveStack() {
+    var p = pcts(), steps = STEPS[S.sub];
+    var now = steps.every(function (st) { return p[st[0]] !== undefined; }) ? hbar(p, '今回') : '';
+    var who = S.sub === 'psps' ? pspsTarget() : (S.data.target || '').trim();
+    var rows = S.sub === 'psps' ? S.pspsRows : S.fecesRows, prev = null;
+    if (rows && who) gather(rows, S.sub === 'psps' ? 'sample' : 'target').forEach(function (x) {
+      var same = S.sub === 'psps' && who === 'TMR（搾乳）・給与時' ? isMainPsps(x) : x.who === who;   // 昔の試料名なしは TMR とみなす
+      if (same && steps.every(function (st) { return x.v[stepName(st)] != null; })) prev = x;
+    });
+    var pv = {};
+    if (prev) steps.forEach(function (st) { pv[st[0]] = prev.v[stepName(st)]; });
+    return (now || '<p class="small muted">全部の段を入れると、ここに今回の構成比が出ます。</p>') +
+      (prev ? hbar(pv, '前回 ' + F.md(prev.date)) : '') +
+      '<div class="legend">' + steps.map(function (st) { return '<span><i class="sw s-' + st[0] + '"></i>' + F.esc(stepName(st)) + '</span>'; }).join('') + '</div>';
   }
   // 目標の帯（0〜100% の上に緑の帯）と、いまの % の印
   function barInner(k) {
@@ -500,7 +568,7 @@
       F.box('所見', '<div class="grid2">' + selField('mucin', 'ムチン', ['あり', 'なし'], d.mucin, '—') +
         selField('foam', '泡', ['−', '＋', '＋＋', '＋＋＋'], d.foam, '—') + '</div>' +
         textField('corn', 'コーン・繊維の残り', d.corn) + areaField('note', 'コメント', d.note)) +
-      '<button type="button" class="wide" data-save="1">残す</button>';
+      saveBar();
   }
 
   function pspsTarget() {
@@ -521,9 +589,8 @@
       '<div class="field"><label>給与後の時間</label><input type="number" inputmode="decimal" step="any" placeholder="任意 例: 0, 4, 8" data-text="hours" value="' +
         F.esc(d.hours == null ? '' : d.hours) + '"></div></div>' +
       (S.stype !== 'TMR' && !d.lot ? textField('rname', '粗飼料の名前（例: グラス 2番 ロール）', d.rname) : '') +
-      areaField('note', 'メモ', d.note) +
       '<p class="small muted" id="ptarget">記録の名前: ' + F.esc(pspsTarget() || '—') + '</p>');
-    html += stepFields() + '<button type="button" class="wide" data-save="1">残す</button>';
+    html += stepFields() + F.box('メモ', areaField('note', '所見など（まとめて）', d.note)) + saveBar();
     return html;
   }
 
@@ -567,6 +634,8 @@
         else if (el.disabled) { el.disabled = false; el.value = it.per_head_kg == null ? '' : it.per_head_kg; }
       });
       document.getElementById('tmrsum').innerHTML = tmrSum();
+      var sb2 = document.getElementById('sbinfo');
+      if (sb2) sb2.innerHTML = sbInfo();
       return;
     }
     if (S.sub === 'psps' && k === 'lot') return render();     // ロットを選んだら名前の欄を出し入れする
@@ -574,6 +643,12 @@
       var el = document.getElementById('pct_' + st[0]); if (el) el.innerHTML = pctText(st[0]);
       var bar = document.getElementById('bar_' + st[0]); if (bar) bar.innerHTML = barInner(st[0]);
     });
+    var sb = document.getElementById('sbinfo');
+    if (sb) sb.innerHTML = sbInfo();
+    var sm = document.getElementById('savemsg');
+    if (sm && sm.className !== 'savemsg') { sm.className = 'savemsg'; sm.textContent = ''; }
+    var lv = document.getElementById('live');
+    if (lv) lv.innerHTML = liveStack();
     var ps = document.getElementById('psum');
     if (ps) ps.innerHTML = sumText();
     var pt = document.getElementById('ptarget');
@@ -591,6 +666,8 @@
       keepDate();
       return render();
     }
+    var stp = e.target.closest('.step');
+    if (stp && !e.target.closest('input,button,a')) { var si = stp.querySelector('[data-step-in]'); if (si) si.focus(); return; }
     var t = e.target.closest('button');
     if (!t) return;
     keepDate();
@@ -599,6 +676,7 @@
     if (t.hasAttribute('data-tgtsave')) return saveTargets(t.getAttribute('data-tgtsave'), false);
     if (t.hasAttribute('data-tgtreset')) { if (confirm('文献値の目安に戻しますか？')) saveTargets(t.getAttribute('data-tgtreset'), true); return; }
     if (t.hasAttribute('data-psample')) { S.psample = t.getAttribute('data-psample'); return render(); }
+    if (t.hasAttribute('data-pcmp')) { S.pcmp = t.getAttribute('data-pcmp'); return render(); }
     if (t.hasAttribute('data-rdays')) { S.rdays = +t.getAttribute('data-rdays'); return render(); }
     if (t.hasAttribute('data-item')) { S.item = t.getAttribute('data-item'); return render(); }
     if (t.hasAttribute('data-grp')) { S.grp = t.getAttribute('data-grp'); S.data = tmrStart(S.grp); return render(); }
@@ -631,10 +709,10 @@
       var items = d.items.map(function (it) {
         return { name: (it.name || '').trim(), lot: it.lot || undefined, total_kg: num(it.total_kg), per_head_kg: perHead(it, d.heads) };
       }).filter(function (it) { return it.name && (it.total_kg !== undefined || it.per_head_kg !== undefined); });
-      if (!items.length) { alert('原料の量を1つ以上入れてください'); return; }
-      if (items.some(function (it) { return it.total_kg !== undefined; }) && !heads) { alert('合計kg を入れたときは頭数も入れてください（1頭あたりを出すため）'); return; }
+      if (!items.length) { return fail('原料の量を1つ以上入れてください'); }
+      if (items.some(function (it) { return it.total_kg !== undefined; }) && !heads) { return fail('合計kg を入れたときは頭数も入れてください（1頭あたりを出すため）', '[data-text="heads"]'); }
       var names = items.map(function (it) { return it.name; });
-      if (names.some(function (n, i) { return names.indexOf(n) !== i; })) { alert('同じ名前の原料が2つあります。名前を分けてください'); return; }
+      if (names.some(function (n, i) { return names.indexOf(n) !== i; })) { return fail('同じ名前の原料が2つあります。名前を分けてください'); }
       rec.target = S.grp;
       rec.data = { heads: heads, items: items, note: d.note || undefined };
     } else {
@@ -645,19 +723,19 @@
         rec.data['memo_' + st[0]] = (d['memo_' + st[0]] || '').trim() || undefined;     // この段のメモ
       });
       var any = steps.some(function (st) { return rec.data[st[0]] !== undefined || rec.data[st[0] + '_g'] !== undefined; });
-      if (S.unit === 'g' && any && !p._all) { alert('g は全部の段に入れてください（無い段は 0）'); return; }
+      if (S.unit === 'g' && any && !p._all) { return fail('g は全部の段に入れてください（無い段は 0）', 'step'); }
       if (S.sub === 'feces') {
-        if (!any && !d.note && !d.mucin) { alert('数字かコメントを入れてください'); return; }
+        if (!any && !d.note && !d.mucin) { return fail('数字かコメントを入れてください', 'step'); }
         rec.target = (d.target || '').trim();
-        if (!rec.target) { alert('採取した牛を入れてください'); return; }
+        if (!rec.target) { return fail('採取した牛を入れてください', '[data-text="target"]'); }
         rec.data.mucin = d.mucin; rec.data.foam = d.foam; rec.data.corn = d.corn || undefined;
       } else {
-        if (!any) { alert('数字を入れてください'); return; }
+        if (!any) { return fail('数字を入れてください', 'step'); }
         rec.target = pspsTarget();
-        if (!rec.target) { alert('粗飼料ロットを選ぶか、名前を入れてください'); return; }
+        if (!rec.target) { return fail('粗飼料ロットを選ぶか、名前を入れてください', '[data-sel="lot"]'); }
         // 採取日（はかった日と別。ふつうは同じか前）と給与後の時間
         var sd = (document.getElementById('sdate') || {}).value || date;
-        if (sd > date) { alert('採取日がはかった日より後になっています'); return; }
+        if (sd > date) { return fail('採取日がはかった日より後になっています', '#sdate'); }
         rec.data.sdate = sd;
         rec.data.hours = num(d.hours);
         rec.data.stype = S.stype === 'TMR' ? 'TMR' : '単味粗飼料';
@@ -670,6 +748,8 @@
     S.data = S.sub === 'tmr' ? tmrStart(S.grp) : (S.sub === 'psps' ? { grp: d.grp, timing: d.timing } : {});
     if (S.sub === 'tmr') S.data.from = null;
     render();
+    window.scrollTo(0, 0);
+    toast('残しました。<a href="' + href('record', S.sub) + '">記録</a>にすぐ出ます');
   }
 
   // ---------- このスマホで入れたもの ----------
@@ -749,27 +829,32 @@
     var all = gather(rows, feces ? 'target' : 'sample');
     if (!all.length) return F.box('これまで', F.none('まだ記録がありません。'));
     var steps = STEPS[S.sub], t = tg(S.sub), html = '', list = all;
+    var cmp = [];
     if (!feces) {
-      // PSPS は試料ごとに比べる（TMR と単味を混ぜない）。はじめは TMR（搾乳）・給与時、無ければいちばん新しい試料
+      // 2026-11-09 本人「記録は TMR（PMR）のみのグラフで良い」「比べる飼料（ソルガム・GS・DC 単味）を選んで比較」。
+      // 昔の PSPS（糞洗い.xlsx・試料名の記録なし）は TMR とみなしてここに入れる（要確認）
+      list = all.filter(isMainPsps);
       var names = [];
-      all.slice().reverse().forEach(function (x) { if (names.indexOf(x.who) < 0) names.push(x.who); });
-      if (!S.psample || names.indexOf(S.psample) < 0) S.psample = names.indexOf('TMR（搾乳）・給与時') >= 0 ? 'TMR（搾乳）・給与時' : names[0];
-      list = all.filter(function (x) { return x.who === S.psample; });
-      html += F.box('くらべる試料', '<div class="opts">' + names.map(function (nm) {
-        return '<button type="button" data-psample="' + F.esc(nm) + '"' + (nm === S.psample ? ' class="on"' : '') + '>' + F.esc(nm) + '</button>';
-      }).join('') + '</div>');
+      all.slice().reverse().forEach(function (x) { if (!isMainPsps(x) && names.indexOf(x.who) < 0) names.push(x.who); });
+      if (S.pcmp && names.indexOf(S.pcmp) < 0) S.pcmp = '';
+      html += F.box('TMR と比べるもの', names.length ? '<div class="opts">' + [''].concat(names).map(function (nm) {
+        return '<button type="button" data-pcmp="' + F.esc(nm) + '"' + ((S.pcmp || '') === nm ? ' class="on"' : '') + '>' + F.esc(nm ? whoLabel(nm) : 'なし') + '</button>';
+      }).join('') + '</div>' : '<p class="small muted">単味粗飼料・残飼の記録はまだありません。入力で飼料タイプを「単味粗飼料」にして入れると、ここで TMR と比べられます。</p>');
+      if (S.pcmp) cmp = all.filter(function (x) { return x.who === S.pcmp; });
+      if (!list.length) return html + F.box('TMR（搾乳）', F.none('TMR の記録がまだありません。')) + (cmp.length ? compareBox(null, cmp) : '');
     }
     // 数字の無い回（メモだけ）は棒にしない
     var withV = list.filter(function (x) { return steps.some(function (st) { return x.v[stepName(st)] != null; }); });
     if (!withV.length) return html + F.box('これまで', F.none('数字の入った記録がまだありません。'));
     var keys = withV.map(function (x) { return x.key; });
     if (keys.indexOf(S.pick) < 0) S.pick = keys[keys.length - 1];
-    html += F.box('段の構成比（100%積み上げ）', '<p class="small muted">棒を押すと、その回の詳細が下に出ます。' + withV.length + '回・' +
+    html += F.box(feces ? '段の構成比（100%積み上げ）' : 'TMR（搾乳）の構成比（100%積み上げ）', '<p class="small muted">棒を押すと、その回の詳細が下に出ます。' + withV.length + '回・' +
       F.day(withV[0].date) + '〜' + F.day(withV[withV.length - 1].date) + '</p>' +
       '<div class="scroll" id="stackwrap">' + stackChart(withV) + '</div>' +
       '<div class="legend">' + steps.map(function (st) { return '<span><i class="sw s-' + st[0] + '"></i>' + F.esc(stepName(st)) + ' ' + F.esc(stepSize(st)) + '</span>'; }).join('') + '</div>');
     var i = keys.indexOf(S.pick);
     html += pickBox(withV[i], i > 0 ? withV[i - 1] : null);
+    if (cmp.length) html += compareBox(withV[i], cmp);
     var items = steps.map(stepName), useT = hasTarget(list[0].who);
     var tb = '<div class="scroll"><table class="tbl"><thead><tr><th>はかった日</th>' + items.map(function (it) { return '<th>' + it.slice(0, 2) + '</th>'; }).join('') +
       (feces ? '<th>ムチン</th><th>泡</th>' : '') + '<th>' + (feces ? '採取した牛・コメント' : '試料・コメント') + '</th></tr></thead><tbody>' +
@@ -779,7 +864,7 @@
             var ok = useT ? inRange(x.v[it], t[steps[j][0]]) : null;
             return '<td class="' + (ok === false ? 'out' : '') + '">' + (x.v[it] != null ? F.n(x.v[it], 1) : '—') + (x.g[it] != null ? '<br><span class="small muted">' + F.n(x.g[it], 1) + 'g</span>' : '') + '</td>';
           }).join('') + (feces ? '<td>' + F.esc(x.tag['ムチン'] || '—') + '</td><td>' + F.esc(x.tag['泡'] || '—') + '</td>' : '') +
-          '<td class="l small">' + (x.quick ? '<span class="badge quick">速報</span> ' : '') + F.esc(x.who) + (x.note.length ? '<br><span class="muted">' + F.esc(x.note.join(' / ')) + '</span>' : '') + '</td></tr>';
+          '<td class="l small">' + (x.quick ? '<span class="badge quick">速報</span> ' : '') + F.esc(whoLabel(x.who)) + (x.note.length ? '<br><span class="muted">' + F.esc(x.note.join(' / ')) + '</span>' : '') + '</td></tr>';
       }).join('') + '</tbody></table></div>' +
       (list.some(function (x) { return x.quick; }) ? '<p class="small muted"><span class="badge quick">速報</span> は入れたばかりの記録（PC の取り込み前）。翌朝 PC が取り込むと正式な記録になります。</p>' : '');
     html += F.box('これまで（%・' + list.length + '回）', tb + F.src('糞洗い.xlsx のこれまでの分と、白川Farm で入れた分（PC が毎朝取り込んだもの）') +
@@ -787,8 +872,28 @@
     return html;
   }
 
+  function isMainPsps(x) { return x.who === 'TMR（搾乳）・給与時' || x.who === '（試料名の記録なし）'; }
+  function whoLabel(w) { return w === '（試料名の記録なし）' ? 'TMR（昔の記録・試料名なし）' : w; }
+  // TMR（選んだ回）と、比べるもの（単味・残飼など）の いちばん新しい回 を段ごとに並べ、比べるものの推移も積み上げで出す
+  function compareBox(tmr, cmp) {
+    var steps = STEPS.psps;
+    var cv = cmp.filter(function (x) { return steps.some(function (st) { return x.v[stepName(st)] != null; }); });
+    if (!cv.length) return F.box('比べる: ' + whoLabel(S.pcmp), F.none('数字の入った記録がありません。'));
+    var c = cv[cv.length - 1];
+    var tbl = '<table class="tbl"><thead><tr><th>段</th><th>TMR<br><span class="small">' + (tmr ? F.md(tmr.date) : '—') + '</span></th><th>' +
+      F.esc(whoLabel(S.pcmp)) + '<br><span class="small">' + F.md(c.date) + '</span></th><th>差</th></tr></thead><tbody>' + steps.map(function (st) {
+        var k = stepName(st), a = tmr ? tmr.v[k] : null, b = c.v[k], d = a != null && b != null ? r1(b - a) : null;
+        return '<tr><td class="l"><span class="s-' + st[0] + '">' + F.esc(k) + '</span></td><td>' + n1(a) + '</td><td><b>' + n1(b) + '</b></td><td>' + (d == null ? '—' : (d > 0 ? '+' : '') + d) + '</td></tr>';
+      }).join('') + '</tbody></table>';
+    var pv = {}, tv = {};
+    steps.forEach(function (st) { pv[st[0]] = c.v[stepName(st)]; if (tmr) tv[st[0]] = tmr.v[stepName(st)]; });
+    return F.box('比べる: ' + whoLabel(S.pcmp), (tmr ? hbar(tv, 'TMR') : '') + hbar(pv, F.md(c.date)) + tbl +
+      (cv.length > 1 ? '<p class="small muted" style="margin-top:10px">' + F.esc(whoLabel(S.pcmp)) + ' の推移（' + cv.length + '回）</p><div class="scroll">' + stackChart(cv, true) + '</div>' : '') +
+      '<p class="small muted">差は「比べるもの − TMR」。単味粗飼料には目標を当てていません。</p>');
+  }
+
   // 100%積み上げの棒。1本＝1回。押した回を枠で囲み、ほかは薄くする
-  function stackChart(list) {
+  function stackChart(list, still) {
     // 棒は横いっぱいに並べる（少ない回は太く、多い回は横に送れる）。日付は重ならない間隔で
     var steps = STEPS[S.sub], n = list.length, L = 26, R = 6, T = 8, B = 22, H = 210;
     var W = Math.max(320, L + R + n * 16), slot = (W - L - R) / n, bw = Math.min(30, slot * 0.68), gap = slot - bw;
@@ -806,10 +911,10 @@
       steps.slice().reverse().forEach(function (st) {
         var v = (x.v[stepName(st)] || 0) / tot * 100;
         g += '<rect x="' + x0 + '" y="' + Y(acc + v).toFixed(1) + '" width="' + bw + '" height="' + Math.max(0, Y(acc) - Y(acc + v)).toFixed(1) +
-          '" class="sb s-' + st[0] + (on ? '' : ' dim') + '" data-pick="' + F.esc(x.key) + '"/>';
+          '" class="sb s-' + st[0] + (still || on ? '' : ' dim') + '"' + (still ? '' : ' data-pick="' + F.esc(x.key) + '"') + '/>';
         acc += v;
       });
-      if (on) g += '<rect x="' + (x0 - 1.5) + '" y="' + (Y(100) - 1.5) + '" width="' + (bw + 3) + '" height="' + (Y(0) - Y(100) + 3) + '" class="pickbox"/>';
+      if (on && !still) g += '<rect x="' + (x0 - 1.5) + '" y="' + (Y(100) - 1.5) + '" width="' + (bw + 3) + '" height="' + (Y(0) - Y(100) + 3) + '" class="pickbox"/>';
       if (i % every === (n - 1) % every) g += '<text x="' + (x0 + bw / 2) + '" y="' + (H - 6) + '" text-anchor="middle">' + F.md(x.date) + '</text>';
     });
     return '<svg class="herd stack" viewBox="0 0 ' + W + ' ' + H + '" style="min-width:' + (W > 360 ? W : 0) + 'px" role="img" aria-label="段の構成比">' + g + '</svg>';
@@ -820,7 +925,7 @@
     var steps = STEPS[S.sub], t = tg(S.sub), useT = hasTarget(x.who), outs = [];
     var meta = (x.quick ? ['速報（PC の取り込み前）'] : []).concat(['はかった日 ' + F.day(x.date)]);
     if (x.tag['採取日'] && x.tag['採取日'] !== x.date) meta.push('採取日 ' + F.day(x.tag['採取日']));
-    meta.push(x.who);
+    meta.push(whoLabel(x.who));
     if (x.tag['給与後の時間'] != null) meta.push('給与後 ' + x.tag['給与後の時間'] + '時間');
     if (x.tag['ムチン']) meta.push('ムチン ' + x.tag['ムチン']);
     if (x.tag['泡']) meta.push('泡 ' + x.tag['泡']);

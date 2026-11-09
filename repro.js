@@ -171,6 +171,7 @@
         var el = document.getElementById('rrecent');        // 「送信待ち」の字を消す
         if (el) el.innerHTML = recentEvents();
         if (window.RecordPage) window.RecordPage.sent();
+        if (window.FeedPage) window.FeedPage.sent();
       });
     }).catch(function (err) {
       S.err = err.status === 404 ? '箱にまだ入力の表がありません（佐藤さんが箱の表を流すと送れます）'
@@ -181,9 +182,14 @@
 
   function farmId() {
     if (S.farm) return Promise.resolve(S.farm);
-    return F.get('rpc/my_farms').then(function (r) {
+    // 餌屋さん（role='feed'）は my_farms に入らないので、餌屋さんも含む my_feed_farms から引く（2026-11-09）。
+    // まだ関数が無い古い箱なら my_farms
+    return F.get('rpc/my_feed_farms').catch(function (e) {
+      if (e.status === 404) return F.get('rpc/my_farms');
+      throw e;
+    }).then(function (r) {
       var v = Array.isArray(r) ? r[0] : r;
-      S.farm = (v && typeof v === 'object') ? (v.my_farms || Object.keys(v).map(function (k) { return v[k]; })[0]) : v;
+      S.farm = (v && typeof v === 'object') ? (v.my_feed_farms || v.my_farms || Object.keys(v).map(function (k) { return v[k]; })[0]) : v;
       if (!S.farm) throw new Error('牧場に入っていません');
       return S.farm;
     });

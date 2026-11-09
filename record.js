@@ -12,8 +12,9 @@
 
   var F = null, Q = null;
   var TABLE = 'input_record';
+  // 糞洗い・PSPS は 2026-11-08 から「餌」（feed.js）へ移した。昔の #/record/feces・psps は餌へ回す
   var SUBS = [['body', '体測', '#/record'], ['bcs', 'BCS・RFS', '#/record/bcs'],
-              ['feces', '糞洗い', '#/record/feces'], ['psps', 'PSPS', '#/record/psps']];
+              ['feces', '糞洗い →餌', '#/feed/feces'], ['psps', 'PSPS →餌', '#/feed/psps']];
   var KIND = { body: '体測', bcs: 'BCS・RFS', feces: '糞洗い', psps: 'PSPS' };
   var SAMPLES = ['TMR（搾乳）', 'TMR（乾乳・育成）', '残飼', '草・サイレージ'];
   var S = { sub: 'body', cow: null, data: {}, sample: SAMPLES[0] };
@@ -26,6 +27,7 @@
     F = window.Farm;
     Q = window.FarmQueue;
     var sub = subOf(hash);
+    if (sub === 'feces' || sub === 'psps') { location.replace('#/feed/' + sub); return; }
     if (sub !== S.sub) { S.sub = sub; S.cow = null; S.data = {}; }
     render();
     Q.send();

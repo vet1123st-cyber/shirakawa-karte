@@ -162,6 +162,17 @@
     c = c || {};
     return esc(c.mgmt_no || '----') + (c.lely_name ? '<span class="lely">' + esc(c.lely_name) + '</span>' : '');
   }
+
+  // 哺乳アプリ（出生〜初回分娩・毎日の哺乳と体重）で同じ牛を開く入口（2026-11-03 本人「双方がつながる形に」）。
+  // 向こうは個体識別番号10桁で牛を引くので、台帳の仮番号（000000…）には出さない。
+  // 哺乳の記録がある牛と、在籍で30か月までの牛（育成も哺乳アプリに登録されている）に出す。
+  var HONYU_URL = 'https://vet1123st-cyber.github.io/Shirakawafarm/#cow=';
+  function honyuLink(c, d, here, age) {
+    if (!/^[0-9]{10}$/.test(c.cow_id || '') || /^000000/.test(c.cow_id)) return '';
+    var fed = rows(d.feed).length || rows(d.colos).length;
+    if (!fed && !(here && age != null && age <= 30)) return '';
+    return '<a class="btn outlink" href="' + HONYU_URL + encodeURIComponent(c.cow_id) + '" target="_blank" rel="noopener">哺乳アプリで この牛を開く ↗</a>';
+  }
   function box(title, inner) { return '<section class="box"><h3>' + esc(title) + '</h3>' + inner + '</section>'; }
   function none(text) { return '<p class="none">' + esc(text) + '</p>'; }
 
@@ -200,7 +211,7 @@
       var b = e.target.querySelector('button[type=submit]');
       b.disabled = true;
       signIn(em.value.trim(), document.getElementById('pw').value)
-        .then(function () { cows = null; route(); })
+        .then(function () { cows = null; role = null; route(); })
         .catch(function (err) {
           showLogin(/invalid/i.test(err.message) ? 'メールアドレスかパスワードが違います。' : 'ログインできませんでした（' + err.message + '）', true);
         });
@@ -242,6 +253,7 @@
       forget();
       forgetMemo();
       cows = null;
+      role = null;
       call('POST', '/auth/v1/logout', {}, t).catch(function () { /* 消えていてもよい */ });
       showLogin('ログアウトしました。');
     };
@@ -431,7 +443,7 @@
     var out = '<div class="head"><div class="no">' + no(c) + '</div>' +
       '<div class="id">' + (/^000000/.test(c.cow_id) ? '台帳の仮番号（耳標未確認） ' : '') + esc(id10(c.cow_id)) + '・' + (c.birth_date ? day(c.birth_date) + '生' : '生年月日未記録') + '</div>' +
       (c.name ? '<div class="name">' + esc(c.name) + '</div>' : '') +
-      '<div class="chips">' + chips.join('') + '</div></div>';
+      '<div class="chips">' + chips.join('') + '</div>' + honyuLink(c, d, here, age) + '</div>';
 
     // 搾ったことのない牛（未経産）に、空のロボットと乳検の欄は出さない
     var heifer = parity != null && parity !== '' && +parity === 0 && !robot.length && !rows(d.milk).length && !failed(d.robot) && !failed(d.milk);
@@ -673,8 +685,8 @@
   // ------------------------------------------------------------ 画面: トップ
   // PC の farm_summary.py が毎朝計算して箱の farm_summary 表に置く（ロボットの群の平均・授精率・妊娠率・受胎率）
   function showTop() {
-    // ゲノムの行（約270KB）はゲノムのページだけで読む
-    loadPage('top', 'top', 'farm_summary?select=section,key,date,value,n,note&section=neq.' + encodeURIComponent('ゲノム') +
+    // ゲノムの行（約270KB）・飼料分析の行（約30KB）・反芻の箱ひげ（約30KB）はそれぞれのページだけで読む
+    loadPage('top', 'top', 'farm_summary?select=section,key,date,value,n,note&section=not.in.(' + encodeURIComponent('ゲノム') + ',' + encodeURIComponent('飼料') + ',' + encodeURIComponent('反芻') + ')' +
       '&order=date.asc', drawTop);
   }
 
@@ -1036,6 +1048,7 @@
     if (h === '#/genome') return 'genome';
     if (/^#\/repro(\/|$)/.test(h)) return 'repro';
     if (/^#\/record(\/|$)/.test(h)) return 'record';
+    if (/^#\/feed(\/|$)/.test(h)) return 'feed';
     return 'top';
   }
 
@@ -1047,6 +1060,31 @@
     no: function (x, fallback) { return no(typeof x === 'string' ? (byId[x] || { mgmt_no: fallback }) : x); },
     me: function () { return (load() || {}).email || ''; }, tabOf: tabOf, trend: function (s, u, l) { return trend(s, u, l); }
   };
+  // 自分の役（owner・staff・feed。2026-11-09 餌屋さんを足した）。箱の rpc/my_role。
+  // 関数がまだ無い古い箱なら staff。電波が無いときは前に読めた役
+  var role = null;
+  function loadRole() {
+    if (role) return Promise.resolve(role);
+    return get('rpc/my_role').then(function (r) {
+      var v = Array.isArray(r) ? r[0] : r;
+      role = (v && typeof v === 'object' ? v.my_role : v) || 'staff';
+      memo('role', role);
+      return role;
+    }).catch(function (err) {
+      if (err.status === 401 || err.status === 403) throw err;
+      var m = memo('role');
+      role = err.status === 404 ? 'staff' : ((m && m.v) || 'staff');
+      return role;
+    });
+  }
+  function onlyFeed(on) {
+    var nav = document.getElementById('tabs');
+    if (nav) [].forEach.call(nav.querySelectorAll('a'), function (a) { a.hidden = on && a.getAttribute('data-tab') !== 'feed'; });
+    var b = document.getElementById('brand');
+    if (b) b.setAttribute('href', on ? '#/feed' : '#/');
+  }
+  window.Farm.role = function () { return role; };
+
   function markTab(t) {
     var nav = document.getElementById('tabs');
     if (!nav) return;
@@ -1085,10 +1123,20 @@
     session().then(function (s) {
       if (!s) { showLogin(); return; }
       showWho(s);
-      return loadCows().then(function () {
+      return loadRole().then(function (rl) {
+        onlyFeed(rl === 'feed');
+        if (rl === 'feed') {
+          // 餌屋さん: 餌のページだけ（ほかの表は箱の決まりで読めない。台帳も読まない）
+          if (tabOf() !== 'feed') { location.replace('#/feed'); return; }
+          markTab('feed');
+          app.onclick = app.oninput = app.onchange = null;
+          window.FeedPage.show(location.hash);
+          return;
+        }
+        return loadCows().then(function () {
         var t = tabOf();
         markTab(t);
-        app.onclick = app.oninput = null;     // 繁殖のページが付けた受け口を、ほかのページへ持ち越さない
+        app.onclick = app.oninput = app.onchange = null;     // 繁殖のページが付けた受け口を、ほかのページへ持ち越さない
         var m = location.hash.match(/^#\/cow\/(\d{10})/);
         if (m) showCow(m[1]);
         else if (t === 'history') window.HistoryPage.show();
@@ -1097,8 +1145,10 @@
         else if (t === 'genome') showGenome();
         else if (t === 'repro') window.ReproPage.show(location.hash);
         else if (t === 'record') window.RecordPage.show(location.hash);
+        else if (t === 'feed') window.FeedPage.show(location.hash);
         else if (t === 'cows') showSearch();
         else showTop();
+        });
       });
     }).catch(function (err) {
       if (err.status === 401 || err.status === 403) { forget(); showLogin('もう一度ログインしてください。', true); return; }

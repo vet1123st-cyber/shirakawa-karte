@@ -99,7 +99,86 @@
     if (S.sub === 'rumen' && !RUM) jobs.push(F.get('farm_summary?select=note,date&section=eq.' + encodeURIComponent('反芻') + '&key=eq.payload')
       .then(function (rows) { RUM = rows.length ? JSON.parse(rows[0].note) : { blocks: [] }; })
       .catch(function () { RUM = { blocks: [], err: true }; }));
-    return Promise.all(jobs);
+    // 2026-11-09 本人「入れたらすぐ全員の記録に出るように」: 箱に届いた入力（input_record）を「速報」として重ねる。
+    // PC の取り込み（毎朝）を待たない。翌朝 PC が取り込んだら正式な記録になる（同じ日・同じ試料なら入力のほうを出す＝直し・取り消しもすぐ効く）
+    var quick = S.sub === 'summary' ? ['feces', 'psps', 'tmr'] : (KIND[S.sub] ? [S.sub] : []);
+    var inputs = [];
+    quick.forEach(function (k) {
+      jobs.push(F.get('input_record?select=id,target,date,kind,data,deleted,updated_at&kind=eq.' + encodeURIComponent(KIND[k]))
+        .then(function (rows) { inputs = inputs.concat(rows || []); }).catch(function () { /* 読めなければ PC の分だけ */ }));
+    });
+    return Promise.all(jobs).then(function () { if (quick.length) mergeQuick(quick, inputs); });
+  }
+
+  // ---------- 速報（箱の入力を、PC が取り込んだ表と同じ形にして重ねる） ----------
+  // 形は import_box.records と同じ: % は全部の段に g があるときだけ g から（小数1桁）、無ければ打った %
+  function pctOf(d, keys, k) {
+    var g = keys.map(function (x) { return num(d[x + '_g']); }), tot = g.reduce(function (a, b) { return a + (b || 0); }, 0);
+    if (g.every(function (x) { return x !== undefined; }) && tot > 0) return r1(num(d[k + '_g']) / tot * 100);
+    return num(d[k]);
+  }
+  function mergeQuick(kinds, rows) {
+    // 同じ id は新しいほう。このスマホの控え（まだ送れていない分も）も入れる
+    var byId = {};
+    rows.forEach(function (r) { byId[r.id] = { r: r, t: Date.parse(r.updated_at) || 0 }; });
+    var s = Q.store();
+    Object.keys(s).forEach(function (k) {
+      var r = s[k];
+      if (r.table !== TABLE || !kinds.some(function (x) { return KIND[x] === r.kind; })) return;
+      if (!byId[r.id] || r.at > byId[r.id].t) byId[r.id] = { r: r, t: r.at };
+    });
+    // 同じ 種類×日×試料（群）なら、あとで入れたもの
+    var by = {};
+    Object.keys(byId).forEach(function (id) {
+      var x = byId[id], key = x.r.kind + '|' + x.r.date + '|' + x.r.target;
+      if (!by[key] || x.t > by[key].t) by[key] = x;
+    });
+    var add = { feces: [], psps: [], tmr: [] }, own = { feces: {}, psps: {}, tmr: {} };
+    Object.keys(by).forEach(function (key) {
+      var r = by[key].r, d = r.data || {}, k = r.kind === 'PSPS' ? 'psps' : r.kind === '糞洗い' ? 'feces' : 'tmr';
+      own[k][r.date + '|' + r.target] = 1;
+      if (r.deleted) return;
+      var Q2 = '速報', out = add[k];
+      if (k === 'tmr') {
+        var heads = num(d.heads);
+        (d.items || []).forEach(function (it) {
+          var total = num(it.total_kg), per = total !== undefined && heads ? r2(total / heads) : num(it.per_head_kg);
+          if (!it.name || (total === undefined && per === undefined)) return;
+          out.push({ date: r.date, grp: r.target, ingredient: it.name, lot: it.lot || null, total_kg: total, heads: heads, per_head_kg: per, note: d.note || null, source: Q2 });
+        });
+        return;
+      }
+      var keys = k === 'psps' ? ['upper', 'middle', 'lower', 'pan'] : ['upper', 'middle', 'lower'];
+      var names = { upper: '上段', middle: '中段', lower: '下段', pan: '受け皿' };
+      var who = k === 'psps' ? 'sample' : 'target';
+      var row = function (item, value, note) { var o = { date: r.date, item: item, value: value === undefined ? null : value, note: note || null, source: Q2 }; o[who] = r.target; out.push(o); };
+      keys.forEach(function (x) {
+        var p = pctOf(d, keys, x);
+        if (p !== undefined) row(names[x], p, k === 'psps' ? d.note : null);
+        if (num(d[x + '_g']) !== undefined) row(names[x] + 'g', num(d[x + '_g']));
+        if (d['memo_' + x]) row(names[x] + 'メモ', null, d['memo_' + x]);
+      });
+      if (k === 'feces') {
+        if (d.mucin) row('ムチン', null, d.mucin);
+        if (d.foam) row('泡', null, d.foam);
+        var memo = [d.corn, d.note].filter(Boolean).join(' / ');
+        if (memo) row('メモ', null, memo);
+      } else {
+        if (d.stype) row('試料の種類', null, d.stype);
+        if (d.lot) row('ロット', null, d.lot);
+        if (d.sdate) row('採取日', null, d.sdate);
+        if (num(d.hours) !== undefined) row('給与後の時間', num(d.hours));
+      }
+    });
+    // PC が取り込んだ「白川Farm」の行は、入力のほうを出す（直し・取り消しがすぐ効くように）。糞洗い.xlsx などはそのまま
+    var keep = function (rows, k, who) {
+      if (rows == null) return add[k].length ? add[k] : null;
+      return rows.filter(function (r) { return !(r.source === '白川Farm' && own[k][r.date + '|' + r[who]]); }).concat(add[k])
+        .sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+    };
+    if (kinds.indexOf('feces') >= 0) S.fecesRows = keep(S.fecesRows, 'feces', 'target');
+    if (kinds.indexOf('psps') >= 0) S.pspsRows = keep(S.pspsRows, 'psps', 'sample');
+    if (kinds.indexOf('tmr') >= 0) S.tmrRows = keep(S.tmrRows, 'tmr', 'grp');
   }
 
   // ---------- 目安の範囲 ----------
@@ -302,10 +381,16 @@
     return n ? '1頭あたり 合計 <b>' + r1(sum) + ' kg</b>（現物・' + n + '原料）' : '';
   }
   function tmrHistory() {
+    // 記録タブでは群をここで切り替える（入力タブは入力欄の上で切り替える）
+    var pick = S.view === 'record' ? F.box('群', '<div class="opts">' + GROUPS.map(function (g) {
+      return '<button type="button" data-grp="' + g + '"' + (S.grp === g ? ' class="on"' : '') + '>' + g + '</button>';
+    }).join('') + '</div>') : '';
     var rows = S.tmrRows;
-    if (rows == null) return F.box('これまで', F.none('これまでの記録が読めませんでした。'));
+    if (rows == null) return pick + F.box('これまで', F.none('これまでの記録が読めませんでした。'));
     rows = rows.filter(function (r) { return r.grp === S.grp; });
-    if (!rows.length) return F.box('これまで（' + S.grp + '）', F.none('まだ記録がありません。'));
+    if (!rows.length) return pick + F.box('これまで（' + S.grp + '）', F.none('まだ記録がありません。'));
+    var quickDates = {};
+    rows.forEach(function (r) { if (r.source === '速報') quickDates[r.date] = 1; });
     var dates = [];
     rows.forEach(function (r) { if (dates.indexOf(r.date) < 0) dates.push(r.date); });
     // 2026-11-09 本人「過去の推移」: 1頭あたり合計（現物kg）の移り変わり。いちばん新しい回と前回の差も出す
@@ -318,7 +403,7 @@
     var names = [];
     rows.forEach(function (r) { if (dates.indexOf(r.date) >= 0 && names.indexOf(r.ingredient) < 0) names.push(r.ingredient); });
     var at = function (d, n) { return rows.filter(function (r) { return r.date === d && r.ingredient === n; })[0]; };
-    return trendBox + F.box('これまで（' + S.grp + '・1頭あたり 現物kg・新しい6回）', '<div class="scroll"><table class="tbl"><thead><tr><th>原料</th>' +
+    return pick + trendBox + F.box('これまで（' + S.grp + '・1頭あたり 現物kg・新しい6回）', '<div class="scroll"><table class="tbl"><thead><tr><th>原料</th>' +
       dates.map(function (d) { return '<th>' + F.md(d) + '</th>'; }).join('') + '</tr></thead><tbody>' +
       names.map(function (n) {
         return '<tr><td class="l">' + F.esc(n) + '</td>' + dates.map(function (d) { var r = at(d, n); return '<td>' + (r && r.per_head_kg != null ? F.n(r.per_head_kg, 1) : '—') + '</td>'; }).join('') + '</tr>';
@@ -328,7 +413,10 @@
       }).join('') + '</tr><tr><td class="l small muted">頭数</td>' + dates.map(function (d) {
         var r = rows.filter(function (x) { return x.date === d; })[0];
         return '<td class="small muted">' + (r && r.heads != null ? r.heads : '—') + '</td>';
-      }).join('') + '</tr></tbody></table></div>' + F.src('白川Farm で入れた分（PC が毎朝取り込んだもの）'));
+      }).join('') + '</tr></tbody></table></div>' +
+      (Object.keys(quickDates).length ? '<p class="small muted"><span class="badge quick">速報</span> ' + Object.keys(quickDates).sort().map(F.md).join('・') +
+        ' は入れたばかり（PC の取り込み前）。翌朝 PC が取り込むと正式な記録になります。</p>' : '') +
+      F.src('白川Farm で入れた分（PC が毎朝取り込んだもの）と速報'));
   }
 
   // ---------- 糞洗い・PSPS ----------
@@ -620,6 +708,7 @@
       var k = r.date + '|' + r[key];
       if (!by[k]) { by[k] = { key: k, date: r.date, who: r[key], v: {}, g: {}, tag: {}, sm: {}, note: [] }; order.push(k); }
       var x = by[k], m = r.item.match(/^(上段|中段|下段|受け皿)メモ$/);
+      if (r.source === '速報') x.quick = true;
       if (m) x.sm[m[1]] = r.note;                                      // この段のメモ（2026-11-09〜）
       else if (/g$/.test(r.item) && r.value != null) x.g[r.item.slice(0, -1)] = +r.value;
       else if (r.item === '給与後の時間' && r.value != null) x.tag[r.item] = +r.value;
@@ -690,8 +779,9 @@
             var ok = useT ? inRange(x.v[it], t[steps[j][0]]) : null;
             return '<td class="' + (ok === false ? 'out' : '') + '">' + (x.v[it] != null ? F.n(x.v[it], 1) : '—') + (x.g[it] != null ? '<br><span class="small muted">' + F.n(x.g[it], 1) + 'g</span>' : '') + '</td>';
           }).join('') + (feces ? '<td>' + F.esc(x.tag['ムチン'] || '—') + '</td><td>' + F.esc(x.tag['泡'] || '—') + '</td>' : '') +
-          '<td class="l small">' + F.esc(x.who) + (x.note.length ? '<br><span class="muted">' + F.esc(x.note.join(' / ')) + '</span>' : '') + '</td></tr>';
-      }).join('') + '</tbody></table></div>';
+          '<td class="l small">' + (x.quick ? '<span class="badge quick">速報</span> ' : '') + F.esc(x.who) + (x.note.length ? '<br><span class="muted">' + F.esc(x.note.join(' / ')) + '</span>' : '') + '</td></tr>';
+      }).join('') + '</tbody></table></div>' +
+      (list.some(function (x) { return x.quick; }) ? '<p class="small muted"><span class="badge quick">速報</span> は入れたばかりの記録（PC の取り込み前）。翌朝 PC が取り込むと正式な記録になります。</p>' : '');
     html += F.box('これまで（%・' + list.length + '回）', tb + F.src('糞洗い.xlsx のこれまでの分と、白川Farm で入れた分（PC が毎朝取り込んだもの）') +
       '<p class="small muted">目標の範囲は <a href="' + href('settings') + '">設定</a> で見られます。</p>');
     return html;
@@ -728,7 +818,7 @@
   // 押した回の詳細: 段ごとの%（前回とくらべた差）・目標から外れた段・見直し候補
   function pickBox(x, prev) {
     var steps = STEPS[S.sub], t = tg(S.sub), useT = hasTarget(x.who), outs = [];
-    var meta = ['はかった日 ' + F.day(x.date)];
+    var meta = (x.quick ? ['速報（PC の取り込み前）'] : []).concat(['はかった日 ' + F.day(x.date)]);
     if (x.tag['採取日'] && x.tag['採取日'] !== x.date) meta.push('採取日 ' + F.day(x.tag['採取日']));
     meta.push(x.who);
     if (x.tag['給与後の時間'] != null) meta.push('給与後 ' + x.tag['給与後の時間'] + '時間');

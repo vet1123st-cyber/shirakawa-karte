@@ -363,3 +363,5 @@ main { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
 @media (prefers-color-scheme: dark) { .feedui .hint b { color: #8fb0e6; } }
 .feedui .herd .pickbox { stroke: var(--fnavy); stroke-width: 2; }
 @media (max-width: 380px) { .fhead h2 { font-size: 23px; } .ftabs a { padding: 11px 13px 9px; font-size: 15px; } .fseg a { padding: 10px 13px; } }
+.badge.quick { background: #fff3c4; color: #7a5a00; }
+@media (prefers-color-scheme: dark) { .badge.quick { background: #3a3218; color: #f0d27a; } }

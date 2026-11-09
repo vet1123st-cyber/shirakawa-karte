@@ -14,6 +14,7 @@
   'use strict';
 
   var F = null, Q = null;
+  var NL = String.fromCharCode(10);   // 札（data-tip）の改行
   var TABLE = 'input_record';
   // 2026-11-09 本人「デザイン・配置はこのように」（LIG vets「飼料・消化分析」の画面）: 紺の見出し＋黄の線、
   // 上のタブ 入力・記録・分析・設定、その下で PSPS／糞洗い／TMR給与（分析は 飼料分析／反芻／総合）を切り替える。
@@ -911,7 +912,8 @@
       steps.slice().reverse().forEach(function (st) {
         var v = (x.v[stepName(st)] || 0) / tot * 100;
         g += '<rect x="' + x0 + '" y="' + Y(acc + v).toFixed(1) + '" width="' + bw + '" height="' + Math.max(0, Y(acc) - Y(acc + v)).toFixed(1) +
-          '" class="sb s-' + st[0] + (still || on ? '' : ' dim') + '"' + (still ? '' : ' data-pick="' + F.esc(x.key) + '"') + '/>';
+          '" class="sb s-' + st[0] + (still || on ? '' : ' dim') + '"' + (still ? '' : ' data-pick="' + F.esc(x.key) + '"') +
+          ' data-tip="' + F.esc(F.day(x.date) + '　' + whoLabel(x.who) + NL + steps.map(function (q) { return stepName(q) + ' ' + n1(x.v[stepName(q)]) + '%'; }).join(NL)) + '"/>';
         acc += v;
       });
       if (on && !still) g += '<rect x="' + (x0 - 1.5) + '" y="' + (Y(100) - 1.5) + '" width="' + (bw + 3) + '" height="' + (Y(0) - Y(100) + 3) + '" class="pickbox"/>';
@@ -956,17 +958,7 @@
 
   // ---------- 反芻の箱ひげ（2026-11-09） ----------
   // 3日ずつ区切り、各牛の3日平均を1点。初産（産次1）と経産（産次2以上）を並べる。PC が毎朝 rumen_book.py で作る
-  function quart(a, p) {          // 並べた値の p 分位（線形補間・Excel の QUARTILE.INC と同じ）
-    var i = (a.length - 1) * p, lo = Math.floor(i);
-    return lo + 1 < a.length ? a[lo] + (a[lo + 1] - a[lo]) * (i - lo) : a[lo];
-  }
-  function boxStat(a) {
-    if (!a.length) return null;
-    var q1 = quart(a, 0.25), md = quart(a, 0.5), q3 = quart(a, 0.75), iqr = q3 - q1;
-    var inside = a.filter(function (v) { return v >= q1 - 1.5 * iqr && v <= q3 + 1.5 * iqr; });
-    return { n: a.length, q1: q1, md: md, q3: q3, lo: inside[0], hi: inside[inside.length - 1],
-             out: a.filter(function (v) { return v < q1 - 1.5 * iqr || v > q3 + 1.5 * iqr; }) };
-  }
+  function boxStat(a) { return window.FarmTrend.boxStat(a); }   // 箱ひげの計算は共用（shared_trend.js）
   function rumenPage() {
     if (!RUM || RUM.err) return F.box('反芻', F.none('反芻のデータが読めませんでした。電波を確かめて開き直してください。'));
     if (!RUM.blocks || !RUM.blocks.length) return F.box('反芻', F.none('まだ反芻のデータがありません（PC の朝の取り込みで入ります）。'));
@@ -987,35 +979,12 @@
       F.src('LELY（ロボット）の反芻時間。' + F.esc(RUM.rule || '') + '。PC が毎朝計算（' + F.day(RUM.last) + ' まで）'));
     return html;
   }
+  // 箱ひげは共用の部品で描く（箱やはずれ値を押すと 頭数・中央値・範囲 が出る）。点線は400分
   function boxChart(st) {
-    var n = st.length, slot = 30, L = 34, R = 6, T = 8, B = 30, W = Math.max(320, L + R + n * slot), H = 220;
-    var vals = [400];
-    st.forEach(function (x) { [x.f, x.m].forEach(function (s) { if (s) vals = vals.concat([s.lo, s.hi], s.out); }); });
-    var lo = Math.floor(Math.min.apply(null, vals) / 50) * 50, hi = Math.ceil(Math.max.apply(null, vals) / 50) * 50;
-    if (hi === lo) hi = lo + 50;
-    var Y = function (v) { return T + (1 - (v - lo) / (hi - lo)) * (H - T - B); };
-    var g = '', step = hi - lo > 300 ? 100 : 50;
-    for (var v = lo; v <= hi; v += step) {
-      g += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(v).toFixed(1) + '" y2="' + Y(v).toFixed(1) + '" class="grid"/>' +
-        '<text x="' + (L - 4) + '" y="' + (Y(v) + 3).toFixed(1) + '" text-anchor="end">' + v + '</text>';
-    }
-    g += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(400).toFixed(1) + '" y2="' + Y(400).toFixed(1) + '" class="ref"/>';
-    var every = n > 20 ? 3 : n > 10 ? 2 : 1;
-    st.forEach(function (x, i) {
-      var cx = L + i * slot + slot / 2;
-      [[x.f, -6, 'var(--spark2)'], [x.m, 6, 'var(--spark)']].forEach(function (a) {
-        var s = a[0], c = cx + a[1], w = 4.5;
-        if (!s) return;
-        g += '<line x1="' + c + '" x2="' + c + '" y1="' + Y(s.hi).toFixed(1) + '" y2="' + Y(s.lo).toFixed(1) + '" stroke="' + a[2] + '" stroke-width="1.2"/>' +
-          '<rect x="' + (c - w) + '" y="' + Y(s.q3).toFixed(1) + '" width="' + (2 * w) + '" height="' + Math.max(1, Y(s.q1) - Y(s.q3)).toFixed(1) +
-          '" fill="' + a[2] + '" fill-opacity=".35" stroke="' + a[2] + '"/>' +
-          '<line x1="' + (c - w) + '" x2="' + (c + w) + '" y1="' + Y(s.md).toFixed(1) + '" y2="' + Y(s.md).toFixed(1) + '" stroke="' + a[2] + '" stroke-width="2.2"/>' +
-          s.out.map(function (o) { return '<circle cx="' + c + '" cy="' + Y(o).toFixed(1) + '" r="1.8" fill="' + a[2] + '"/>'; }).join('');
-      });
-      if (i % every === (n - 1) % every) g += '<text x="' + cx + '" y="' + (H - B + 13) + '" text-anchor="middle">' + F.md(x.b.end) + '</text>';
-      if (x.b.days < 3) g += '<text x="' + cx + '" y="' + (H - B + 25) + '" text-anchor="middle" class="cap">' + x.b.days + '日</text>';
-    });
-    return '<svg class="herd boxplot" viewBox="0 0 ' + W + ' ' + H + '" style="min-width:' + (W > 360 ? W : 0) + 'px" role="img" aria-label="反芻時間の箱ひげ図">' + g + '</svg>';
+    return window.FarmTrend.box(st.map(function (x) {
+      return { label: F.md(x.b.end), note: F.md(x.b.start) + '〜' + F.md(x.b.end) + '・' + x.b.days + '日分', mark: x.b.days < (RUM.block || 3) ? x.b.days + '日' : '',
+               sets: [{ name: '初産', color: 'var(--spark2)', stat: x.f }, { name: '経産', color: 'var(--spark)', stat: x.m }] };
+    }), { unit: '分', ref: { v: 400, label: '400分: ロボットの点検で「反芻が短い」とする線' }, label: '反芻時間の箱ひげ図' });
   }
 
   // ---------- 総合分析 ----------

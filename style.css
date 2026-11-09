@@ -412,3 +412,7 @@ main { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
 .ftoast.go { opacity: 0; transform: translate(-50%, -10px); }
 .fhead { padding-bottom: 2px; }
 .ftabs { top: calc(52px + env(safe-area-inset-top)); margin: 0 -16px; padding: 0 16px; }
+/* 発育のグラフ（年表で「発育」を選んだとき） */
+.growth { margin: 6px 0 12px; }
+.growth .gh { font-size: 14px; margin: 14px 0 2px; }
+.herd .ref { stroke: var(--warn); stroke-width: 1.2; stroke-dasharray: 4 3; }

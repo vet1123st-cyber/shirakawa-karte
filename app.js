@@ -702,6 +702,7 @@
       (set['計算日'] ? day(set['計算日']) + ' に計算' : '') + '</div></div>';
     html += '<p><a href="#/business">個体販売・バルク乳の推移 →</a></p>';
     html += robotTop(rows);
+    html += rumenTop(rows);
     html += reproTop(rows);
     html += box('決めごと', '<dl class="kv">' + Object.keys(set).filter(function (k) { return k !== '計算日'; }).map(function (k) {
       return '<dt>' + esc(k.replace('の決め方', '')) + '</dt><dd class="small">' + esc(set[k]) + '</dd>';
@@ -730,6 +731,34 @@
       trend([{ name: '日乳量', color: 'var(--spark)', pts: milk }], 'kg') +
       '<div class="stats">' + cell('反芻時間', '分', 0) + cell('リフューズ', '', 2) + cell('失敗', '', 2) + '</div>' +
       src('レリー Horizon「搾乳可能牛」（搾乳している牛だけの平均。毎朝）'));
+  }
+
+  // 反芻の箱ひげ（週ごと・初産と経産）。2026-11-09 本人「トップの反芻は初産と経産に分けて箱ひげ（乾乳牛・トレーニングは除く）」。
+  // PC の rumen_book.py が farm_summary section='反芻週' に置く（7日ずつ・直近12週・各牛の7日平均が1点）。はずれ値を押すとその牛
+  function rumenTop(rows) {
+    var r = rows.filter(function (x) { return x.section === '反芻週' && x.key === 'payload'; })[0];
+    if (!r) return '';
+    var P;
+    try { P = JSON.parse(r.note); } catch (e) { return ''; }
+    if (!P.blocks || !P.blocks.length) return '';
+    var FT = window.FarmTrend;
+    // 札は文字だけ（4桁・レリーの名前・10桁）
+    var who = function (id) { var c = byId[id]; return c ? (c.mgmt_no || '') + (c.lely_name ? ' ' + c.lely_name : '') + '（' + id + '）' : id; };
+    var pts = function (list) { return (list || []).map(function (x) { return { v: x[0], tip: who(x[1]) }; }); };
+    var st = P.blocks.filter(function (b) { return b.days > 0; });
+    var last = st[st.length - 1], lf = FT.boxStat(pts(last.first)), lm = FT.boxStat(pts(last.multi));
+    var cellOf = function (label, s) {
+      return statH(label, s ? n(s.md, 0) + '<span class="small">分</span>' : '—', s ? s.n + '頭・' + n(s.q1, 0) + '〜' + n(s.q3, 0) : '');
+    };
+    return box('反芻（週ごと・' + md(last.start) + '〜' + md(last.end) + '）',
+      '<div class="stats">' + cellOf('初産の中央値', lf) + cellOf('経産の中央値', lm) + '</div>' +
+      '<div class="legend"><span><i style="background:var(--spark2)"></i>初産（産次1）</span><span><i style="background:var(--spark)"></i>経産（産次2以上）</span></div>' +
+      '<div class="scroll">' + FT.box(st.map(function (b) {
+        return { label: md(b.end), note: md(b.start) + '〜' + md(b.end) + '・' + b.days + '日分', mark: b.days < 7 ? b.days + '日' : '',
+                 sets: [{ name: '初産', color: 'var(--spark2)', stat: FT.boxStat(pts(b.first)) }, { name: '経産', color: 'var(--spark)', stat: FT.boxStat(pts(b.multi)) }] };
+      }), { unit: '分', ref: { v: 400, label: '400分: ロボットの点検で「反芻が短い」とする線' }, label: '週ごとの反芻時間の箱ひげ図' }) + '</div>' +
+      '<p class="small muted">1点＝1頭の7日平均。箱は真ん中の半分、中の線は中央値、点ははずれた牛（押すと番号）。日付は週の終わりの日。</p>' +
+      src('レリー Horizon。' + (P.rule || '')) + '<p class="small"><a href="#/feed/analysis/rumen">3日ごと・90日まで見る →</a></p>');
   }
 
   function reproTop(rows) {
@@ -986,7 +1015,8 @@
     if (cap) vals.push(cap);
     var lo = Math.min.apply(null, vals.concat([0])), hi = Math.max.apply(null, vals);
     if (hi === lo) hi = lo + 1;
-    hi = Math.ceil(hi * 1.08);
+    var sc0 = window.FarmTrend.nice(lo, hi * 1.05, 3, true);   // キリの良い目もり（2026-11-09）
+    lo = sc0.lo; hi = sc0.hi;
     var X = function (m) { return L + months.indexOf(m) / Math.max(1, months.length - 1) * (W - L - R); };
     var Y = function (v) { return T + (1 - (v - lo) / (hi - lo)) * (H - T - B); };
     var past = s.filter(function (x) { return x.kind === '実際'; });
@@ -1003,11 +1033,17 @@
     }
     if (past.length) g += '<path d="' + line(past.concat(now), 'mid') + '" fill="none" stroke="' + color + '" stroke-width="2"/>';
     now.forEach(function (x) { g += '<circle cx="' + X(x.m).toFixed(1) + '" cy="' + Y(x.mid).toFixed(1) + '" r="3.5" fill="' + color + '"/>'; });
+    // 月ごとの見えない帯に札（押すとその月の値。見通しは幅も）
+    var colW = (W - L - R) / Math.max(1, months.length - 1);
+    s.forEach(function (x) {
+      g += '<rect x="' + (X(x.m) - colW / 2).toFixed(1) + '" y="' + T + '" width="' + colW.toFixed(1) + '" height="' + (H - T - B) + '" fill="transparent" data-tip="' +
+        esc((label ? label + ' ' : '') + x.m + '（' + x.kind + '）' + String.fromCharCode(10) + n(x.mid) + (x.kind === '見通し' ? '（' + n(x.lo) + '〜' + n(x.hi) + '）' : '')) + '"/>';
+    });
     if (cap) g += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(cap).toFixed(1) + '" y2="' + Y(cap).toFixed(1) +
       '" stroke="var(--warn)" stroke-width="1.5" stroke-dasharray="5 4"/><text x="' + (W - R) + '" y="' + (Y(cap) - 3).toFixed(1) +
       '" text-anchor="end" class="cap">容量 ' + cap + '</text>';
     // 目もり: 上下の数字と、最初・いま・最後の月
-    var ticks = [lo, Math.round((lo + hi) / 2), hi].map(function (v) {
+    var ticks = sc0.ticks.map(function (v) {
       return '<text x="' + (L - 4) + '" y="' + (Y(v) + 4).toFixed(1) + '" text-anchor="end">' + v + '</text>' +
         '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(v).toFixed(1) + '" y2="' + Y(v).toFixed(1) + '" class="grid"/>';
     }).join('');

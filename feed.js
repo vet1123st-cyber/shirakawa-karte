@@ -42,7 +42,9 @@
   var DEFAULT_TMR = ['デントコーンサイレージ', 'グラスサイレージ', '乾草', '配合飼料'];
   var SHOW4 = ['乾物', 'CP', 'aNDF', 'NDFD30'];
   var S = { view: 'input', sub: 'psps', data: {}, unit: 'g', grp: '搾乳', stype: 'TMR', kind: null, lot: null, item: 'NDFD30',
-            psample: null, rdays: 30, tgt: null, tgtAt: null, tgtEdit: false };
+            psample: null, rdays: 30, tgt: null, tgtAt: null, tgtEdit: false, sumN: 5 };
+  // 総合は日を全部並べるとスマホで約26画面になった（2026-11-11 本人「最初は最近の数日だけ、もっと見るで続き」）
+  var SUM_FIRST = 5, SUM_STEP = 10;
   var P = null;            // 飼料分析（farm_summary の section='飼料'）
   var LASTTMR = {};        // 群ごとのいちばん新しい TMR（箱の tmr_feed から）。欄の名前を前回から写すため
 
@@ -679,6 +681,10 @@
     if (t.hasAttribute('data-psample')) { S.psample = t.getAttribute('data-psample'); return render(); }
     if (t.hasAttribute('data-pcmp')) { S.pcmp = t.getAttribute('data-pcmp'); return render(); }
     if (t.hasAttribute('data-rdays')) { S.rdays = +t.getAttribute('data-rdays'); return render(); }
+    if (t.hasAttribute('data-summore')) {         // 総合の続き（見ていた場所はそのまま）
+      var y = window.scrollY;
+      S.sumN += SUM_STEP; render(); window.scrollTo(0, y); return;
+    }
     if (t.hasAttribute('data-item')) { S.item = t.getAttribute('data-item'); return render(); }
     if (t.hasAttribute('data-grp')) { S.grp = t.getAttribute('data-grp'); S.data = tmrStart(S.grp); return render(); }
     if (t.hasAttribute('data-addrow')) { S.data.items.push({ name: '', lot: '' }); return render(); }
@@ -1014,7 +1020,9 @@
     if (!dates.length) return html + F.box('はかった日', F.none('まだ糞洗い・PSPS の記録がありません。'));
     var kinds = {};
     (P.kinds || []).forEach(function (k) { kinds[k.id] = k.label; });
-    html += dates.slice(0, 24).map(function (date) {
+    var shown = Math.max(SUM_FIRST, S.sumN || SUM_FIRST), rest = dates.length - shown;
+    html += '<p class="small muted">はかった日 ' + dates.length + ' 日のうち、新しい ' + Math.min(shown, dates.length) + ' 日を出しています。</p>';
+    html += dates.slice(0, shown).map(function (date) {
       var inner = '';
       fe.filter(function (x) { return x.date === date; }).forEach(function (x) {
         inner += '<p><b>糞洗い</b> ' + F.esc(x.who) + '<br>上段 ' + n1(x.v['上段']) + '・中段 ' + n1(x.v['中段']) + '・下段 ' + n1(x.v['下段']) + ' %' +
@@ -1046,6 +1054,7 @@
       inner += lines.length ? '<p><b>粗飼料の分析（推定）</b></p><ul class="list">' + lines.join('') + '</ul>' : '<p class="small muted">この日以前の粗飼料の分析がありません。</p>';
       return F.box(F.day(date), inner);
     }).join('');
+    if (rest > 0) html += '<button type="button" class="wide" data-summore="1">もっと見る（あと ' + rest + ' 日・' + Math.min(SUM_STEP, rest) + ' 日ずつ）</button>';
     return html + F.src('糞洗い.xlsx・白川Farm で入れた分・全酪連の飼料分析');
   }
   function n1(v) { return v == null ? '—' : F.n(v, 1); }

@@ -20,8 +20,19 @@
   // 卵巣は片側に黄体・卵胞が2個以上あることがある（2026-11-11 本人）。1個ずつ足して、それぞれ mm を入れる。
   // 箱には「CL15・F12・F10」の1つの文字で入れる（本人のメモ「LCl RF」と同じ並び。farm.db の列は ov_left / ov_right のまま）
   var OVT = ['CL', 'F', 'F嚢腫', 'CL嚢腫', '静止'];
-  var MM_MAIN = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];      // よく使う大きさ。ほかは 5〜30 を選ぶ
-  var MM_REST = [5, 6, 7, 8, 9, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30];
+  // よく使う大きさ（2026-11-11 本人）: F は 5〜15mm、CL は 18〜28mm をボタンで。ほかは 5〜30 の残りを選ぶ。
+  // 嚢腫（F嚢腫・CL嚢腫）は大きさを書かない
+  function mmMain(t) {
+    var lo = t === 'CL' ? 18 : 5, hi = t === 'CL' ? 28 : 15, a = [];
+    for (var n = lo; n <= hi; n++) a.push(n);
+    return a;
+  }
+  function mmRest(t) {
+    var main = mmMain(t), a = [];
+    for (var n = 5; n <= 30; n++) if (main.indexOf(n) < 0) a.push(n);
+    return a;
+  }
+  function noSize(t) { return /嚢腫/.test(t); }
   function parseOv(v) {
     return String(v || '').split('・').filter(Boolean).map(function (x) {
       var m = /^(CL嚢腫|F嚢腫|CL|F|静止)(\d+)?$/.exec(x);
@@ -45,6 +56,9 @@
     { k: 'twin', label: '双子', opts: ['単胎', '双胎(同側)', '双胎(両側)'],
       watch: 'preg_check', when: function (r) { return r.preg_check === '＋'; } },
     { k: 'sire_embryo', label: '種雄牛・受精卵（ちがうときだけ）', text: true, placeholder: 'last_semen' },
+    // 妊鑑がマイナスなら、その場で卵巣を診て処置を決める（2026-11-11 本人）
+    { k: 'ov_right', label: '卵巣 右', ov: true, big: true, watch: 'preg_check', when: function (r) { return r.preg_check === '−'; } },
+    { k: 'ov_left', label: '卵巣 左', ov: true, big: true, watch: 'preg_check', when: function (r) { return r.preg_check === '−'; } },
     TREAT_F, DRUG_F,
     BCS_F, RF_F,
     { k: 'note', label: 'メモ', text: true, long: true }
@@ -498,7 +512,7 @@
     var miss = listNow().filter(function (c) { return !c.removed && !by[c.cow_id]; }).map(function (c) { return String(c.mgmt_no || ''); });
     if (miss.length) check.push('今回記載のない牛（' + miss.join('、') + '）：未検診');
     var nomm = nos(function (o) {
-      return parseOv(o.ov_left).concat(parseOv(o.ov_right)).some(function (x) { return x.t !== '静止' && /^(CL|F)/.test(x.t) && !x.mm; });
+      return parseOv(o.ov_left).concat(parseOv(o.ov_right)).some(function (x) { return (x.t === 'CL' || x.t === 'F') && !x.mm; });
     });
     if (nomm.length) check.push(nomm.join('、') + '：卵巣所見の大きさ（mm）が未入力');
     var nopc = listNow().filter(function (c) { return !c.removed && isPreg(c) && by[c.cow_id] && !by[c.cow_id].preg_check; })
@@ -798,13 +812,19 @@
     }).join('');
     a.forEach(function (x, i) {
       if (x.t === '静止') return;
+      var del = '<button type="button" class="ovdel" data-ovdel="' + f.k + '" data-i="' + i + '" aria-label="消す">×</button>';
+      if (noSize(x.t)) {
+        h += '<div class="ovrow"><div class="mm"><span class="ovname">' + F.esc(x.t) + '</span>' + del + '</div></div>';
+        return;
+      }
+      var main = mmMain(x.t);
       h += '<div class="ovrow"><span class="ovname">' + F.esc(x.t) + (x.mm ? ' ' + x.mm + 'mm' : '') + '</span><div class="mm">' +
-        MM_MAIN.map(function (n) {
+        main.map(function (n) {
           return '<button type="button" data-ovmm="' + f.k + '" data-i="' + i + '" data-val="' + n + '"' + (x.mm === n ? ' class="on"' : '') + '>' + n + '</button>';
         }).join('') +
-        '<select data-ovsel="' + f.k + '" data-i="' + i + '"' + (x.mm && MM_MAIN.indexOf(x.mm) < 0 ? ' class="on"' : '') + '><option value="">ほか</option>' +
-        MM_REST.map(function (n) { return '<option value="' + n + '"' + (x.mm === n ? ' selected' : '') + '>' + n + 'mm</option>'; }).join('') +
-        '</select><button type="button" class="ovdel" data-ovdel="' + f.k + '" data-i="' + i + '" aria-label="消す">×</button></div></div>';
+        '<select data-ovsel="' + f.k + '" data-i="' + i + '"' + (x.mm && main.indexOf(x.mm) < 0 ? ' class="on"' : '') + '><option value="">ほか</option>' +
+        mmRest(x.t).map(function (n) { return '<option value="' + n + '"' + (x.mm === n ? ' selected' : '') + '>' + n + 'mm</option>'; }).join('') +
+        '</select>' + del + '</div></div>';
     });
     return h;
   }
@@ -854,6 +874,8 @@
       // 同じところをもう一度押したら取り消し（押し間違いをその場で直せるように）
       r[key] = String(r[key]) === val ? undefined : (f && f.num ? Number(val) : val);
     }
+    // 妊鑑をマイナス以外に直したら、マイナスのときに入れた卵巣は消す（見えない所見を残さない）
+    if (key === 'preg_check' && !S.ev && S.mode === '妊鑑' && r.preg_check !== '−') { r.ov_right = undefined; r.ov_left = undefined; }
     clean(r);
     // 発情・処置は「残す」を押したときに控えに入れる。所見は押したそばから控えに入れる
     var wasFresh = !!current.fresh;

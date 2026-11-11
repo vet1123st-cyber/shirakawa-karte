@@ -410,7 +410,11 @@
   //   SS    … 1回目の PG は獣医が当日に打った。あす・あさって・しあさってをお願いする
   //   NdS   … N日後から4日間（4dS を 11日に決めたら 15PG・16PG・17E2・18発情）
   //   シダー … 8日間入れておく（11日に入れたら 19抜去＋PG・20PG・21E2・22発情）
+  //   短縮SS   … PG（当日・獣医）→ E2（あす）の2日間。発情はその次の日
+  //   蓄膿PG×2 … PG を2日間。当日は獣医、あすだけ農家さん
   function schedule(tr, d) {
+    if (tr === '短縮SS') return [md(d) + ' 済', '—', md(addDays(d, 1)), md(addDays(d, 2))];
+    if (tr === '蓄膿PG×2') return [md(d) + ' 済', md(addDays(d, 1)), '—', '—'];
     var m = /^(\d)dS$/.exec(tr), s;
     if (tr === 'SS') s = 0; else if (m) s = Number(m[1]); else if (tr === 'シダー') s = 8; else return null;
     return [md(addDays(d, s)) + (tr === 'SS' ? ' 済' : (tr === 'シダー' ? ' 抜去＋PG' : '')),
@@ -464,12 +468,13 @@
     cows.forEach(function (o) {
       o.treatment.forEach(function (t) {
         var x = schedule(t, d);
-        if (x) sched.push([o.no].concat(x).concat([t === 'SS' ? 'SS（当日PG）' : t === 'シダー' ? 'シダー（8日間）' : t.replace('dS', '日後からSS')]));
-        else if (t === '短縮SS' || t === '蓄膿PG×2') other.push(o.no + '：' + t);
+        if (x) sched.push([o.no].concat(x).concat([t === 'SS' ? 'SS（当日PG）' : t === 'シダー' ? 'シダー（8日間）' :
+          t === '短縮SS' ? '短縮SS（PG・E2）' : t === '蓄膿PG×2' ? '蓄膿 PG×2' : t.replace('dS', '日後からSS')]));
       });
     });
     sched.sort(function (a, b) {
-      var k = function (r) { var m = /^(\d+)\/(\d+)/.exec(r[2]); return Number(m[1]) * 100 + Number(m[2]); };
+      // 1回目の PG の日の順（年をまたぐ 12月→1月 も正しく並ぶよう、検診の日より前の月は翌年とみなす）
+      var k = function (r) { var m = /^(\d+)\/(\d+)/.exec(r[1]), mo = Number(m[1]); return (mo < Number(d.slice(5, 7)) ? mo + 12 : mo) * 100 + Number(m[2]); };
       return k(a) - k(b) || a[0].localeCompare(b[0]);
     });
     // 3. 次回までの予定（案）
@@ -478,10 +483,10 @@
     var plan = [];
     var push = function (list, text) { if (list.length) plan.push(list.join('、') + '：' + text); };
     push(nos(function (o) { return o.preg_check === '再妊鑑'; }), '次回 再妊鑑');
-    push(sched.map(function (r) { return r[0]; }).filter(function (v, i, a) { return a.indexOf(v) === i; }),
+    push(sched.filter(function (r) { return r[5] !== '蓄膿 PG×2'; }).map(function (r) { return r[0]; })
+           .filter(function (v, i, a) { return a.indexOf(v) === i; }),
          '処置表のとおり。発情の日に授精（またはET）、授精後28日から妊娠鑑定');
-    push(nos(has('短縮SS')), '短縮SS');
-    push(nos(has('蓄膿PG×2')), '蓄膿 PG×2、次回再検');
+    push(nos(has('蓄膿PG×2')), '蓄膿。あすも PG（処置表）、次回再検');
     push(nos(function (o) { return /嚢腫/.test(String(o.ov_left) + String(o.ov_right)) && o.treatment.indexOf('除外') < 0; }), '嚢腫。次回再検');
     push(nos(has('様子見')), '様子見。次回再検');
     push(nos(has('発情')), '発情。授精・ET の確認');
@@ -578,7 +583,7 @@
             ['right', 'center', 'center', 'center', 'center', 'left']);
       y += 8;
       para('※「済」は獣医が当日に打った分です。「抜去＋PG」はシダーを抜いて PG を打つ日です。');
-    } else para('・今回 SS・シダーの牛はいません');
+    } else para('・今回 SS・シダー・PG の牛はいません');
     R.other.forEach(function (t) { para('・' + t); });
     h2('5. 確認事項');
     (R.check.length ? R.check : ['とくになし']).forEach(function (t) { para('・' + t, R.check.length ? '#C00000' : '#000'); });

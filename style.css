@@ -424,3 +424,14 @@ main { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
 .growth { margin: 6px 0 12px; }
 .growth .gh { font-size: 14px; margin: 14px 0 2px; }
 .herd .ref { stroke: var(--warn); stroke-width: 1.2; stroke-dasharray: 4 3; }
+
+/* 繁殖の入力: SS〜5dS のタブと、卵巣の所見ごとの mm（2026-11-11） */
+.ssrow { display: flex; gap: 4px; width: 100%; margin-bottom: 4px; }
+.ssrow button { flex: 1; min-width: 0; padding: 10px 2px; }
+.ovrow { width: 100%; border-top: 1px solid var(--line); padding-top: 6px; margin-top: 2px; }
+.ovname { font-weight: 700; display: block; margin-bottom: 4px; }
+.mm { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.opts .mm button, .field.big .opts .mm button { min-width: 38px; min-height: 40px; padding: 6px 4px; font-size: 15px; }
+.mm select { min-height: 40px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--chip); color: var(--ink); font-size: 15px; }
+.mm select.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.opts .mm button.ovdel { background: none; border: none; color: var(--muted, #888); font-size: 20px; }

@@ -17,11 +17,25 @@
   var STORE = 'farm.inputs.v1';       // まだ送れていない／送った入力の控え
 
   // ---------- 入れるもの（検診アプリと同じ。項目の名前は farm.db の repro_exam の列と同じ） ----------
-  var CL = ['小', '中', '大'];
-  var OV = ['なし', 'Cl', 'F', 'Cl+F', '嚢腫', '静止'];
-  function hasCl(v) { return v === 'Cl' || v === 'Cl+F'; }
-  function hasF(v) { return v === 'F' || v === 'Cl+F'; }
+  // 卵巣は片側に黄体・卵胞が2個以上あることがある（2026-11-11 本人）。1個ずつ足して、それぞれ mm を入れる。
+  // 箱には「CL15・F12・F10」の1つの文字で入れる（本人のメモ「LCl RF」と同じ並び。farm.db の列は ov_left / ov_right のまま）
+  var OVT = ['CL', 'F', 'F嚢腫', 'CL嚢腫', '静止'];
+  var MM_MAIN = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];      // よく使う大きさ。ほかは 5〜30 を選ぶ
+  var MM_REST = [5, 6, 7, 8, 9, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30];
+  function parseOv(v) {
+    return String(v || '').split('・').filter(Boolean).map(function (x) {
+      var m = /^(CL嚢腫|F嚢腫|CL|F|静止)(\d+)?$/.exec(x);
+      return m ? { t: m[1], mm: m[2] ? Number(m[2]) : null } : { t: x, mm: null };   // 前の書き方（Cl+F など）はそのまま残す
+    });
+  }
+  function fmtOv(a) { return a.map(function (x) { return x.t + (x.mm || ''); }).join('・') || undefined; }
   function inList(v, x) { return [].concat(v || []).indexOf(x) >= 0; }
+  // 処置（2026-11-11 本人。妊鑑・検診で同じ）。SS は「当日」か「何日後に始めるか」を1つだけ選ぶ（3dS = 3日後 SS）
+  var SSG = ['SS', '1dS', '2dS', '3dS', '4dS', '5dS'];
+  var TREAT_F = { k: 'treatment', label: '処置', multi: true, big: true, group: SSG,
+                  opts: SSG.concat(['シダー', '短縮SS', '蓄膿PG×2', '様子見', '薬注', '発情', '出血', '除外']) };
+  var DRUG_F = { k: 'drug', label: '　薬の名前', text: true, watch: 'treatment',
+                 when: function (r) { return inList(r.treatment, '薬注'); } };
 
   // BCS・ルーメンフィルは毎回押せる位置に出す（2026-11-10 本人「BCS、ルーメンフィルスコアもみたい」→ 前回の値も上に出す）
   var BCS_F = { k: 'bcs', label: 'BCS', num: true, opts: ['2.50', '2.75', '3.00', '3.25', '3.50', '3.75', '4.00', '4.25'] };
@@ -31,39 +45,22 @@
     { k: 'twin', label: '双子', opts: ['単胎', '双胎(同側)', '双胎(両側)'],
       watch: 'preg_check', when: function (r) { return r.preg_check === '＋'; } },
     { k: 'sire_embryo', label: '種雄牛・受精卵（ちがうときだけ）', text: true, placeholder: 'last_semen' },
-    { k: 'plan', label: '次の手', big: true, opts: ['このまま', '再妊鑑', '発情待ち', '今日AI', 'ET予定', '飛ばす', '淘汰候補'] },
-    { k: 'plan_days', label: '何日後', opts: ['5', '7', '10', '14', '21', '30'], num: true, free: true, watch: 'plan',
-      when: function (r) { return r.plan === '再妊鑑' || r.plan === 'ET予定'; } },
+    TREAT_F, DRUG_F,
     BCS_F, RF_F,
     { k: 'note', label: 'メモ', text: true, long: true }
   ];
   var EXAM = [
-    { k: 'ov_left', label: '卵巣 左', opts: OV, big: true },
-    { k: 'cl_left', label: '　左の黄体', opts: CL, watch: 'ov_left', when: function (r) { return hasCl(r.ov_left); } },
-    { k: 'fol_left', label: '　左の卵胞 mm', opts: ['8', '10', '12', '15', '18', '20'], num: true, free: true,
-      watch: 'ov_left', when: function (r) { return hasF(r.ov_left); } },
-    { k: 'ov_right', label: '卵巣 右', opts: OV, big: true },
-    { k: 'cl_right', label: '　右の黄体', opts: CL, watch: 'ov_right', when: function (r) { return hasCl(r.ov_right); } },
-    { k: 'fol_right', label: '　右の卵胞 mm', opts: ['8', '10', '12', '15', '18', '20'], num: true, free: true,
-      watch: 'ov_right', when: function (r) { return hasF(r.ov_right); } },
-    { k: 'uterus', label: '子宮所見', big: true, opts: ['正常', '貯留 少', '貯留 中', '貯留 多', '子宮炎', '蓄膿', '復古不全'] },
-    { k: 'fluid_char', label: '　貯留物の性状', opts: ['漿液', '膿様', '血様'], watch: 'uterus',
-      when: function (r) { return (r.uterus || '').indexOf('貯留') === 0 || r.uterus === '蓄膿'; } },
+    { k: 'ov_right', label: '卵巣 右', ov: true, big: true },
+    { k: 'ov_left', label: '卵巣 左', ov: true, big: true },
+    { k: 'uterus', label: '子宮所見', big: true, opts: ['正常', '貯留少', '貯留多い', '蓄膿'] },
     { k: 'm_score', label: 'Mスコア（粘液）', opts: ['0', '1', '2', '3'], num: true },
-    { k: 'treatment', label: 'プログラム処置法', multi: true, big: true,
-      opts: ['なし', 'SS', '変速SS', 'LH', 'PG', 'シダー挿入', 'シダー抜去', '薬注', '洗浄'] },
-    { k: 'drug', label: '　薬の名前', text: true, watch: 'treatment',
-      when: function (r) { return inList(r.treatment, '薬注') || inList(r.treatment, '洗浄'); } },
-    { k: 'plan', label: '次の手', big: true, opts: ['今日AI', '発情待ち', '飛ばす', '再検', 'ET予定', '様子見', '淘汰候補'] },
-    { k: 'plan_days', label: '何日後', opts: ['3', '5', '7', '10', '14', '21'], num: true, free: true, watch: 'plan',
-      when: function (r) { return r.plan === '再検' || r.plan === 'ET予定' || r.plan === '様子見'; } },
+    TREAT_F, DRUG_F,
     BCS_F, RF_F,
     { k: 'note', label: 'メモ', text: true, long: true }
   ];
   // 毎回は入れないもの。全部並べると1頭の巻き取りが長くなって、40頭が終わらないため
   var MORE = [
     { k: 'locomotion', label: '跛行スコア', opts: ['1', '2', '3', '4', '5'], num: true },
-    { k: 'cyst', label: '嚢腫の別', opts: ['卵胞嚢腫', '黄体嚢腫'] },
     { k: 'bhb', label: 'BHB', number: true, step: '0.1' },
     { k: 'temp_c', label: '直腸温', number: true, step: '0.1' }
   ];
@@ -251,7 +248,11 @@
     r = r || {};
     var bits = [];
     if (r.preg_check) bits.push('妊鑑' + r.preg_check);
-    var side = function (s, ov, cl, fol) { return ov ? s + ov + (cl ? '(' + cl + ')' : '') + (fol ? '(' + fol + 'mm)' : '') : ''; };
+    // いまの書き方（CL15・F12）は大きさが入っているので、そのまま出す。前の書き方（Cl+F と別の欄の大きさ）も読めるように残す
+    var side = function (s, ov, cl, fol) {
+      if (!ov) return '';
+      return /^(CL|F|静止)/.test(ov) ? s + ov : s + ov + (cl ? '(' + cl + ')' : '') + (fol ? '(' + fol + 'mm)' : '');
+    };
     var ov = [side('L', r.ov_left, r.cl_left, r.fol_left), side('R', r.ov_right, r.cl_right, r.fol_right)].filter(Boolean).join(' ');
     if (ov) bits.push(ov);
     if (r.uterus && r.uterus !== '正常') bits.push(r.uterus);
@@ -481,7 +482,7 @@
     var r = current.data, c = cowRow() || {};
     var set = S.ev ? EVENT[S.ev.kind] : MODES[S.mode][1];
     return set.map(function (f) { return fieldHtml(f, r, c); }).join('') +
-      (S.ev ? '' : '<button type="button" class="more" data-more="1">' + (S.more ? '− ほかを閉じる' : '＋ ほかも入れる（跛行・嚢腫の別・BHB・直腸温）') + '</button>' +
+      (S.ev ? '' : '<button type="button" class="more" data-more="1">' + (S.more ? '− ほかを閉じる' : '＋ ほかも入れる（跛行・BHB・直腸温）') + '</button>' +
         (S.more ? MORE.map(function (f) { return fieldHtml(f, r, c); }).join('') : '')) +
       (current.fresh ? '' : '<button type="button" class="link danger" data-undo="1">この入力を取り消す</button>');
   }
@@ -495,6 +496,8 @@
         : '<input type="text" data-text="' + f.k + '" placeholder="' + F.esc(ph) + '" value="' + F.esc(v || '') + '">';
     } else if (f.number) {
       h += '<input type="number" inputmode="decimal" step="' + (f.step || '1') + '" data-text="' + f.k + '" value="' + F.esc(v == null ? '' : v) + '">';
+    } else if (f.ov) {
+      h += '<div class="opts">' + ovHtml(f, v) + '</div>';
     } else {
       h += '<div class="opts">' + optsHtml(f, v) + '</div>';
       if (f.free) {
@@ -507,14 +510,52 @@
   }
   function optsHtml(f, v) {
     var chosen = f.multi ? [].concat(v || []) : [v == null ? null : String(v)];
-    return f.opts.map(function (o) {
+    var btn = function (o) {
       return '<button type="button" data-set="' + f.k + '" data-val="' + F.esc(o) + '"' + (chosen.indexOf(o) >= 0 ? ' class="on"' : '') + '>' + F.esc(o) + '</button>';
+    };
+    if (!f.group) return f.opts.map(btn).join('');
+    // SS〜5dS は1列のタブ（1つだけ選ぶ）。ほかはその下に並べる
+    return '<div class="ssrow">' + f.group.map(btn).join('') + '</div>' +
+      f.opts.filter(function (o) { return f.group.indexOf(o) < 0; }).map(btn).join('');
+  }
+  // 卵巣: 上の列で足す → 足したものが1行ずつ並び、それぞれ mm を選ぶ。×で消す
+  function ovHtml(f, v) {
+    var a = parseOv(v), still = a.some(function (x) { return x.t === '静止'; });
+    var h = OVT.map(function (t) {
+      return '<button type="button" data-ovadd="' + f.k + '" data-val="' + t + '"' + (t === '静止' && still ? ' class="on"' : '') + '>' +
+        (t === '静止' ? t : '＋' + t) + '</button>';
     }).join('');
+    a.forEach(function (x, i) {
+      if (x.t === '静止') return;
+      h += '<div class="ovrow"><span class="ovname">' + F.esc(x.t) + (x.mm ? ' ' + x.mm + 'mm' : '') + '</span><div class="mm">' +
+        MM_MAIN.map(function (n) {
+          return '<button type="button" data-ovmm="' + f.k + '" data-i="' + i + '" data-val="' + n + '"' + (x.mm === n ? ' class="on"' : '') + '>' + n + '</button>';
+        }).join('') +
+        '<select data-ovsel="' + f.k + '" data-i="' + i + '"' + (x.mm && MM_MAIN.indexOf(x.mm) < 0 ? ' class="on"' : '') + '><option value="">ほか</option>' +
+        MM_REST.map(function (n) { return '<option value="' + n + '"' + (x.mm === n ? ' selected' : '') + '>' + n + 'mm</option>'; }).join('') +
+        '</select><button type="button" class="ovdel" data-ovdel="' + f.k + '" data-i="' + i + '" aria-label="消す">×</button></div></div>';
+    });
+    return h;
+  }
+  function onOv(key, fn) {
+    var a = parseOv(current.data[key]);
+    fn(a);
+    current.data[key] = fmtOv(a);
+    // 前の作りの欄（黄体 小中大・卵胞mm）は、いまの書き方では使わない
+    var side = key === 'ov_left' ? 'left' : 'right';
+    current.data['cl_' + side] = undefined;
+    current.data['fol_' + side] = undefined;
+    clean(current.data);
+    var wasFresh = !!current.fresh;
+    if (!current.deleted) keep(current);
+    if (wasFresh) return repaintForm();
+    var box = document.querySelector('[data-field="' + key + '"] .opts');
+    if (box) box.innerHTML = ovHtml(fieldByKey(key), current.data[key]);
   }
   function paintField(key) {
     var box = document.querySelector('[data-field="' + key + '"] .opts');
     var f = fieldByKey(key);
-    if (box && f) box.innerHTML = optsHtml(f, current.data[key]);
+    if (box && f) box.innerHTML = f.ov ? ovHtml(f, current.data[key]) : optsHtml(f, current.data[key]);
   }
   function hasWatcher(key) { return fieldsOf().some(function (f) { return f.watch === key; }); }
   function repaintForm() {
@@ -531,20 +572,16 @@
       var cur = [].concat(r[key] || []);
       if (val === 'なし') cur = cur.indexOf('なし') >= 0 ? [] : ['なし'];
       else {
-        cur = cur.filter(function (x) { return x !== 'なし'; });
-        var i = cur.indexOf(val);
-        if (i >= 0) cur.splice(i, 1); else cur.push(val);
+        var had = cur.indexOf(val) >= 0;
+        cur = cur.filter(function (x) {      // SS〜5dS はどれか1つ（別のを押したら入れ替える）
+          return x !== 'なし' && x !== val && !(f.group && f.group.indexOf(val) >= 0 && f.group.indexOf(x) >= 0);
+        });
+        if (!had) cur.push(val);
       }
       r[key] = cur;
     } else {
       // 同じところをもう一度押したら取り消し（押し間違いをその場で直せるように）
       r[key] = String(r[key]) === val ? undefined : (f && f.num ? Number(val) : val);
-    }
-    // 卵巣で「なし・嚢腫・静止」なら、その側の大きさは意味を失うので消す（「卵巣なしなのに黄体 大」を作らない）
-    if (key === 'ov_left' || key === 'ov_right') {
-      var side = key === 'ov_left' ? 'left' : 'right';
-      if (!hasCl(r[key])) r['cl_' + side] = undefined;
-      if (!hasF(r[key])) r['fol_' + side] = undefined;
     }
     clean(r);
     // 発情・処置は「残す」を押したときに控えに入れる。所見は押したそばから控えに入れる
@@ -557,6 +594,11 @@
   function clean(r) { Object.keys(r).forEach(function (k) { if (r[k] === undefined || r[k] === '' || (Array.isArray(r[k]) && !r[k].length)) delete r[k]; }); }
 
   function onInput(e) {
+    var sel = e.target.getAttribute && e.target.getAttribute('data-ovsel');
+    if (sel && current) {
+      var si = +e.target.getAttribute('data-i'), sv = e.target.value;
+      return onOv(sel, function (a) { if (a[si]) a[si].mm = sv ? Number(sv) : null; });
+    }
     var k = e.target.getAttribute && e.target.getAttribute('data-text');
     if (!k || !current) return;
     var f = fieldByKey(k), v = e.target.value;
@@ -569,6 +611,22 @@
   function onClick(e) {
     var t = e.target.closest('button');
     if (!t) return;
+    if (t.hasAttribute('data-ovadd')) {
+      var ot = t.getAttribute('data-val');
+      return onOv(t.getAttribute('data-ovadd'), function (a) {
+        var still = a.some(function (x) { return x.t === '静止'; });
+        if (still || ot === '静止') a.length = 0;                 // 静止と、ほかの所見は一緒には入れない
+        if (!(still && ot === '静止')) a.push({ t: ot, mm: null });
+      });
+    }
+    if (t.hasAttribute('data-ovmm')) {
+      var mi = +t.getAttribute('data-i'), mv = Number(t.getAttribute('data-val'));
+      return onOv(t.getAttribute('data-ovmm'), function (a) { if (a[mi]) a[mi].mm = a[mi].mm === mv ? null : mv; });
+    }
+    if (t.hasAttribute('data-ovdel')) {
+      var di = +t.getAttribute('data-i');
+      return onOv(t.getAttribute('data-ovdel'), function (a) { a.splice(di, 1); });
+    }
     if (t.hasAttribute('data-set')) return onSet(t.getAttribute('data-set'), t.getAttribute('data-val'));
     if (t.hasAttribute('data-mode')) { S.mode = t.getAttribute('data-mode'); return renderCow(); }
     if (t.hasAttribute('data-more')) { S.more = !S.more; return repaintForm(); }

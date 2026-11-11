@@ -786,17 +786,23 @@
     } else {
       h += '<div class="opts">' + optsHtml(f, v) + '</div>';
       if (f.free) {
-        var inOpts = f.opts.indexOf(String(v)) >= 0;
+        var inOpts = f.opts.some(function (o) { return sameVal(f, v, o); });
         h += '<div class="inline"><input type="number" inputmode="numeric" placeholder="直接入れる" data-text="' + f.k + '" value="' +
           F.esc(v != null && !inOpts ? v : '') + '"></div>';
       }
     }
     return h + '</div>';
   }
+  // 数の欄は数として比べる（BCS の「3.00」は 3 として控えるので、文字で比べると 2.75 しか光らなかった。2026-11-11）
+  function sameVal(f, v, o) {
+    if (v == null || v === '') return false;
+    return f && f.num ? Number(v) === Number(o) : String(v) === String(o);
+  }
   function optsHtml(f, v) {
-    var chosen = f.multi ? [].concat(v || []) : [v == null ? null : String(v)];
+    var chosen = f.multi ? [].concat(v || []) : [];
     var btn = function (o) {
-      return '<button type="button" data-set="' + f.k + '" data-val="' + F.esc(o) + '"' + (chosen.indexOf(o) >= 0 ? ' class="on"' : '') + '>' + F.esc(o) + '</button>';
+      var on = f.multi ? chosen.indexOf(o) >= 0 : sameVal(f, v, o);
+      return '<button type="button" data-set="' + f.k + '" data-val="' + F.esc(o) + '"' + (on ? ' class="on"' : '') + '>' + F.esc(o) + '</button>';
     };
     if (!f.group) return f.opts.map(btn).join('');
     // SS〜5dS は1列のタブ（1つだけ選ぶ）。ほかはその下に並べる
@@ -872,7 +878,7 @@
       r[key] = cur;
     } else {
       // 同じところをもう一度押したら取り消し（押し間違いをその場で直せるように）
-      r[key] = String(r[key]) === val ? undefined : (f && f.num ? Number(val) : val);
+      r[key] = sameVal(f, r[key], val) ? undefined : (f && f.num ? Number(val) : val);
     }
     // 妊鑑をマイナス以外に直したら、マイナスのときに入れた卵巣は消す（見えない所見を残さない）
     if (key === 'preg_check' && !S.ev && S.mode === '妊鑑' && r.preg_check !== '−') { r.ov_right = undefined; r.ov_left = undefined; }

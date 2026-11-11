@@ -207,7 +207,9 @@
   function show(hash) {
     F = window.Farm;
     var m = hash.match(/^#\/repro\/cow\/(\d{10})/);
-    if (m) { S.open = m[1]; S.ev = null; return loadAll().then(renderCow); }
+    // 一覧からタップした牛は、タップしたタブ（妊鑑／検診）の入力をすぐ出す（前の牛の種類を引きずらない。2026-11-11 本人）
+    if (m) { if (S.open !== m[1]) { S.mode = ''; S.more = false; } S.open = m[1]; S.ev = null; return loadAll().then(renderCow); }
+    if (/^#\/repro\/report/.test(hash)) { S.ev = null; return loadAll().then(renderReport); }
     if (/^#\/repro\/event/.test(hash)) { S.ev = S.ev || { kind: '処置', cow: null }; return loadAll().then(renderEvent); }
     S.ev = null;
     if (/^#\/repro\/et/.test(hash)) return renderEt();
@@ -235,6 +237,7 @@
 
   // ---------- 検診リスト ----------
   function isPreg(c) { return String(c.reason || '').indexOf('妊鑑') >= 0; }
+  function inTab(c, tab) { return byTab(tab).some(function (x) { return x.cow_id === c.cow_id; }); }
   function inputsOf(cow) {
     var s = store(), d = S.listDate || workDate();
     var mine = Object.keys(s).map(function (k) { return s[k]; })
@@ -324,7 +327,8 @@
       var tabs = ['妊鑑', '検診'], n = listNow().filter(function (c) { return !c.removed; }).length;
       html += '<div class="head"><div class="name"><b>検診リスト</b></div><div class="id">' + F.day(S.listDate) + ' に作ったリスト・' +
         n + ' 頭（入力の日 ' + F.day(workDate()) + '）</div>' +
-        '<button type="button" class="link" data-edit="1">' + (S.edit ? '✓ 直し終わり' : '✎ リストを直す（足す・外す・並べ替え）') + '</button></div>' +
+        '<button type="button" class="link" data-edit="1">' + (S.edit ? '✓ 直し終わり' : '✎ リストを直す（足す・外す・並べ替え）') + '</button>' +
+        '<a class="link" href="#/repro/report">📄 今日の検診レポート（PDF）</a></div>' +
         '<div class="seg">' + tabs.map(function (t) {
           var rows = byTab(t), done = rows.filter(function (c) { return inputsOf(c.cow_id).length; }).length;
           return '<button type="button" data-rtab="' + t + '"' + (S.tab === t ? ' class="on"' : '') + '>' +
@@ -391,6 +395,267 @@
     };
   }
 
+
+  // ---------- 検診レポート（2026-11-11 本人「検診が終わったらすぐ、今日記録した牛のレポートを農家に PDF で」） ----------
+  // 1.概要 2.区分別の結果 3.次回までの予定（案） 4.処置表 5.確認事項。
+  // PDF は外の部品を使わずに作る: 画面と同じ絵を canvas に描き、その絵（JPEG）を1ページずつ PDF に入れる。
+  var FARM_NAME = '白川牧場';
+  function addDays(d, n) {
+    var t = new Date(d + 'T00:00:00');
+    t.setDate(t.getDate() + n);
+    return localDate(t);
+  }
+  function md(d) { return Number(d.slice(5, 7)) + '/' + Number(d.slice(8, 10)); }
+  // SS（ショートシンク）は全部午前で PG → PG → E2 → 発情 の4日間。
+  //   SS    … 1回目の PG は獣医が当日に打った。あす・あさって・しあさってをお願いする
+  //   NdS   … N日後から4日間（4dS を 11日に決めたら 15PG・16PG・17E2・18発情）
+  //   シダー … 8日間入れておく（11日に入れたら 19抜去＋PG・20PG・21E2・22発情）
+  function schedule(tr, d) {
+    var m = /^(\d)dS$/.exec(tr), s;
+    if (tr === 'SS') s = 0; else if (m) s = Number(m[1]); else if (tr === 'シダー') s = 8; else return null;
+    return [md(addDays(d, s)) + (tr === 'SS' ? ' 済' : (tr === 'シダー' ? ' 抜去＋PG' : '')),
+            md(addDays(d, s + 1)), md(addDays(d, s + 2)), md(addDays(d, s + 3))];
+  }
+  function reportData(d) {
+    var s = store(), by = {};
+    var mine = Object.keys(s).map(function (k) { return s[k]; });
+    var ids = mine.map(function (r) { return r.id; });
+    var rows = mine.concat(S.server.filter(function (r) { return ids.indexOf(r.id) < 0; })).filter(function (r) {
+      return r.date === d && !r.deleted && (r.kind === '妊娠鑑定' || r.kind === '繁殖検診');
+    }).sort(function (a, b) { return String(a.updated_at || '').localeCompare(String(b.updated_at || '')); });
+    rows.forEach(function (r) {
+      var o = by[r.cow_id] = by[r.cow_id] || { cow_id: r.cow_id, treatment: [] }, x = r.data || {};
+      Object.keys(x).forEach(function (k) {
+        if (k === 'treatment') [].concat(x[k] || []).forEach(function (t) { if (o.treatment.indexOf(t) < 0) o.treatment.push(t); });
+        else if (k === 'note' && o.note && o.note !== x[k]) o.note += ' ' + x[k];
+        else o[k] = x[k];
+      });
+    });
+    var led = F.byId(), onList = {};
+    listNow().forEach(function (c) { onList[c.cow_id] = c; });
+    var cows = Object.keys(by).map(function (id) {
+      var o = by[id];
+      o.no = String((onList[id] && onList[id].mgmt_no) || (led[id] && led[id].mgmt_no) || id.slice(5, 9));
+      var tr = o.treatment, has = function (t) { return tr.indexOf(t) >= 0; };
+      var ss = tr.filter(function (t) { return t === 'SS' || /^\ddS$/.test(t) || t === '短縮SS'; }).length;
+      var t1 = ss ? 'SS' : has('シダー') ? 'シダー' : has('蓄膿PG×2') ? 'PG' : has('薬注') ? '薬注' : has('発情') ? '発情' :
+        has('出血') ? '出血' : has('様子見') ? '様子見' : has('除外') ? '除外' : '';
+      o.group = o.preg_check === '＋' ? '妊娠＋' : o.preg_check === '−' ? '妊娠せず' + (t1 ? '・' + t1 : '') :
+        o.preg_check ? o.preg_check : (t1 || '検診のみ');
+      var ov = function (side, v) { return v ? side + String(v).replace(/・/g, ' ') : ''; };
+      o.text = [o.preg_check === '＋' ? '妊娠＋' : o.preg_check === '−' ? '−' : (o.preg_check || ''),
+                o.twin && o.twin !== '単胎' ? o.twin : '', ov('右', o.ov_right), ov('左', o.ov_left),
+                o.uterus && o.uterus !== '正常' ? o.uterus : '', o.m_score != null ? 'm' + o.m_score : '',
+                tr.join(' '), o.drug ? '（' + o.drug + '）' : '',
+                o.bcs != null ? 'BCS' + o.bcs : '', o.rumen_fill != null ? 'RF' + o.rumen_fill : '', o.note || '']
+        .filter(Boolean).join(' ');
+      return o;
+    });
+    var order = ['妊娠＋', '妊娠せず', '再妊鑑', '流産・胚死滅', 'SS', 'シダー', 'PG', '薬注', '発情', '出血', '様子見', '除外', '検診のみ'];
+    var rank = function (g) { for (var i = 0; i < order.length; i++) if (g.indexOf(order[i]) === 0) return i; return order.length; };
+    cows.sort(function (a, b) { return rank(a.group) - rank(b.group) || a.group.localeCompare(b.group) || a.no.localeCompare(b.no); });
+    var groups = [];
+    cows.forEach(function (o) {
+      var g = groups.filter(function (x) { return x[0] === o.group; })[0];
+      if (g) g[1]++; else groups.push([o.group, 1]);
+    });
+    // 4. 処置表
+    var sched = [], other = [];
+    cows.forEach(function (o) {
+      o.treatment.forEach(function (t) {
+        var x = schedule(t, d);
+        if (x) sched.push([o.no].concat(x).concat([t === 'SS' ? 'SS（当日PG）' : t === 'シダー' ? 'シダー（8日間）' : t.replace('dS', '日後からSS')]));
+        else if (t === '短縮SS' || t === '蓄膿PG×2') other.push(o.no + '：' + t);
+      });
+    });
+    sched.sort(function (a, b) {
+      var k = function (r) { var m = /^(\d+)\/(\d+)/.exec(r[2]); return Number(m[1]) * 100 + Number(m[2]); };
+      return k(a) - k(b) || a[0].localeCompare(b[0]);
+    });
+    // 3. 次回までの予定（案）
+    var nos = function (f) { return cows.filter(f).map(function (o) { return o.no; }); };
+    var has = function (t) { return function (o) { return o.treatment.indexOf(t) >= 0; }; };
+    var plan = [];
+    var push = function (list, text) { if (list.length) plan.push(list.join('、') + '：' + text); };
+    push(nos(function (o) { return o.preg_check === '再妊鑑'; }), '次回 再妊鑑');
+    push(sched.map(function (r) { return r[0]; }).filter(function (v, i, a) { return a.indexOf(v) === i; }),
+         '処置表のとおり。発情の日に授精（またはET）、授精後28日から妊娠鑑定');
+    push(nos(has('短縮SS')), '短縮SS');
+    push(nos(has('蓄膿PG×2')), '蓄膿 PG×2、次回再検');
+    push(nos(function (o) { return /嚢腫/.test(String(o.ov_left) + String(o.ov_right)) && o.treatment.indexOf('除外') < 0; }), '嚢腫。次回再検');
+    push(nos(has('様子見')), '様子見。次回再検');
+    push(nos(has('発情')), '発情。授精・ET の確認');
+    push(nos(has('出血')), '出血。次回確認');
+    push(nos(has('薬注')), '薬注。次回再検');
+    push(nos(has('除外')), '繁殖から除外（次の分娩まで検診リストに載せません）');
+    // 5. 確認事項
+    var check = [];
+    var miss = listNow().filter(function (c) { return !c.removed && !by[c.cow_id]; }).map(function (c) { return String(c.mgmt_no || ''); });
+    if (miss.length) check.push('今回記載のない牛（' + miss.join('、') + '）：未検診');
+    var nomm = nos(function (o) {
+      return parseOv(o.ov_left).concat(parseOv(o.ov_right)).some(function (x) { return x.t !== '静止' && /^(CL|F)/.test(x.t) && !x.mm; });
+    });
+    if (nomm.length) check.push(nomm.join('、') + '：卵巣所見の大きさ（mm）が未入力');
+    var nopc = listNow().filter(function (c) { return !c.removed && isPreg(c) && by[c.cow_id] && !by[c.cow_id].preg_check; })
+      .map(function (c) { return String(c.mgmt_no || ''); });
+    if (nopc.length) check.push(nopc.join('、') + '：妊娠鑑定の結果が未入力');
+    return { date: d, cows: cows, groups: groups, sched: sched, other: other, plan: plan, check: check };
+  }
+
+  // canvas に描く（A4 を 150dpi で 1240×1754）
+  function drawReport(R) {
+    var W = 1240, H = 1754, M = 96, pages = [], ctx, y;
+    var FONT = '"Hiragino Sans","Hiragino Kaku Gothic ProN","Yu Gothic","Meiryo","Noto Sans JP",sans-serif';
+    function page() {
+      var c = document.createElement('canvas');
+      c.width = W; c.height = H;
+      ctx = c.getContext('2d');
+      ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+      ctx.textBaseline = 'middle';
+      pages.push(c); y = M;
+    }
+    function need(h) { if (y + h > H - M) page(); }
+    function font(px, bold) { ctx.font = (bold ? 'bold ' : '') + px + 'px ' + FONT; }
+    function wrap(text, maxW) {
+      var out = [], line = '';
+      String(text).split('').forEach(function (ch) {
+        if (ctx.measureText(line + ch).width > maxW && line) { out.push(line); line = ch; } else line += ch;
+      });
+      out.push(line);
+      return out;
+    }
+    function title(t) { need(60); font(40, true); ctx.fillStyle = '#000'; ctx.textAlign = 'left'; ctx.fillText(t, M, y + 22); y += 56; }
+    function h2(t) { need(110); y += 26; font(28, true); ctx.fillStyle = '#000'; ctx.textAlign = 'left'; ctx.fillText(t, M, y + 16); y += 40; }
+    function para(t, color) {
+      font(24);
+      wrap(t, W - 2 * M).forEach(function (ln) {
+        need(34); ctx.fillStyle = color || '#000'; ctx.textAlign = 'left'; ctx.fillText(ln, M, y + 16); y += 34;
+      });
+    }
+    function table(heads, rows, widths, aligns) {
+      var x0 = M, rowH = 36;
+      function cells(vals, isHead, lines) {
+        var h = rowH * Math.max.apply(null, lines.map(function (l) { return l.length; }));
+        need(h);
+        var x = x0;
+        vals.forEach(function (v, i) {
+          ctx.fillStyle = isHead ? '#2F5597' : '#fff';
+          ctx.fillRect(x, y, widths[i], h);
+          ctx.strokeStyle = '#999'; ctx.lineWidth = 1.5; ctx.strokeRect(x, y, widths[i], h);
+          ctx.fillStyle = isHead ? '#fff' : '#000';
+          font(24, isHead || v.bold);
+          var al = isHead ? 'center' : (aligns && aligns[i]) || 'left';
+          ctx.textAlign = al;
+          lines[i].forEach(function (ln, j) {
+            ctx.fillText(ln, al === 'center' ? x + widths[i] / 2 : al === 'right' ? x + widths[i] - 10 : x + 10, y + rowH * j + rowH / 2);
+          });
+          x += widths[i];
+        });
+        y += h;
+      }
+      font(24, true);
+      cells(heads, true, heads.map(function (v) { return [v]; }));
+      rows.forEach(function (r) {
+        font(24, r.bold);
+        var vals = r.map(function (v) { return { toString: function () { return String(v); }, bold: r.bold }; });
+        cells(vals, false, r.map(function (v, i) { return wrap(String(v), widths[i] - 20); }));
+      });
+    }
+    page();
+    title('繁殖検診報告 ' + R.date.replace(/-/g, '/'));
+    para('農場：' + FARM_NAME + '　実施日：' + R.date.replace(/-/g, '/'));
+    h2('1. 概要');
+    var sum = R.groups.map(function (g) { return [g[0], g[1]]; }), tot = ['合計', R.cows.length];
+    tot.bold = true;
+    table(['区分', '頭数'], sum.concat([tot]), [300, 200], ['left', 'right']);
+    h2('2. 区分別の結果');
+    table(['区分', '牛番号', '所見・処置'], R.cows.map(function (o) { return [o.group, o.no, o.text]; }), [250, 130, W - 2 * M - 380], ['left', 'right', 'left']);
+    h2('3. 次回までの予定（案）');
+    (R.plan.length ? R.plan : ['とくになし']).forEach(function (t) { para('・' + t); });
+    h2('4. 処置表（SS＝ショートシンク。処置はすべて午前）');
+    if (R.sched.length) {
+      table(['牛番号', 'PG', 'PG', 'E2', '発情', '内容'], R.sched, [130, 230, 130, 130, 130, W - 2 * M - 750],
+            ['right', 'center', 'center', 'center', 'center', 'left']);
+      y += 8;
+      para('※「済」は獣医が当日に打った分です。「抜去＋PG」はシダーを抜いて PG を打つ日です。');
+    } else para('・今回 SS・シダーの牛はいません');
+    R.other.forEach(function (t) { para('・' + t); });
+    h2('5. 確認事項');
+    (R.check.length ? R.check : ['とくになし']).forEach(function (t) { para('・' + t, R.check.length ? '#C00000' : '#000'); });
+    return pages;
+  }
+
+  // 絵（JPEG）を1ページずつ入れただけの PDF を組む
+  function pdfFrom(pages) {
+    var enc = function (str) { var a = new Uint8Array(str.length); for (var i = 0; i < str.length; i++) a[i] = str.charCodeAt(i) & 255; return a; };
+    var parts = [], offs = [], pos = 0;
+    var put = function (u) { parts.push(u); pos += u.length; };
+    var obj = function (n, head, stream) {
+      offs[n] = pos;
+      put(enc(n + ' 0 obj\n' + head + (stream ? '\nstream\n' : '\n')));
+      if (stream) { put(stream); put(enc('\nendstream\n')); }
+      put(enc('endobj\n'));
+    };
+    put(enc('%PDF-1.4\n'));
+    var n = pages.length, kids = [];
+    pages.forEach(function (c, i) {
+      var b64 = c.toDataURL('image/jpeg', 0.9).split(',')[1], bin = atob(b64), img = enc(bin);
+      var pg = 3 + i * 3, ct = pg + 1, im = pg + 2;
+      kids.push(pg + ' 0 R');
+      var content = enc('q 595.28 0 0 841.89 0 0 cm /Im0 Do Q');
+      obj(pg, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Resources << /XObject << /Im0 ' + im + ' 0 R >> >> /Contents ' + ct + ' 0 R >>');
+      obj(ct, '<< /Length ' + content.length + ' >>', content);
+      obj(im, '<< /Type /XObject /Subtype /Image /Width ' + c.width + ' /Height ' + c.height +
+          ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + img.length + ' >>', img);
+    });
+    obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
+    obj(2, '<< /Type /Pages /Count ' + n + ' /Kids [' + kids.join(' ') + '] >>');
+    var total = 3 + n * 3, xref = pos, t = 'xref\n0 ' + total + '\n0000000000 65535 f \n';
+    for (var i = 1; i < total; i++) t += ('0000000000' + offs[i]).slice(-10) + ' 00000 n \n';
+    t += 'trailer\n<< /Size ' + total + ' /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF\n';
+    put(enc(t));
+    return new Blob(parts, { type: 'application/pdf' });
+  }
+
+  function renderReport() {
+    if (F.tabOf() !== 'repro') return;
+    var d = workDate(), R = reportData(d);
+    var html = '<a class="back" href="#/repro">← リスト</a>' +
+      '<div class="head"><div class="name"><b>検診レポート</b></div><div class="id">' + F.day(d) + ' に入れた ' + R.cows.length + ' 頭</div></div>' +
+      '<div class="pickers"><label class="small muted" for="rdate">入力の日</label><input id="rdate" type="date" value="' + d + '"></div>' +
+      '<div id="rbar" class="rbar"></div>';
+    if (!R.cows.length) {
+      F.app.innerHTML = html + F.box('レポート', F.none('この日に入れた妊娠鑑定・繁殖検診がまだありません。'));
+    } else {
+      html += '<div class="seg"><button type="button" class="primary" data-pdf="1">PDF を送る・保存する</button></div>' +
+        '<p class="small muted" id="rpdfmsg">ボタンを押すと、LINE やメールなどの送り先を選べます。</p><div id="rpages"></div>';
+      F.app.innerHTML = html;
+      var pages = drawReport(R), box = document.getElementById('rpages');
+      pages.forEach(function (c) { c.className = 'rpage'; box.appendChild(c); });
+      F.app.onclick = function (e) {
+        var b = e.target.closest('button');
+        if (!b || !b.hasAttribute('data-pdf')) return;
+        var name = '繁殖検診報告_' + d.replace(/-/g, '') + '.pdf', blob = pdfFrom(pages), msg = document.getElementById('rpdfmsg');
+        var file = null;
+        try { file = new File([blob], name, { type: 'application/pdf' }); } catch (err) { file = null; }
+        if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+          navigator.share({ files: [file], title: name }).catch(function () { /* やめたときは何もしない */ });
+          return;
+        }
+        var a = document.createElement('a');
+        a.href = URL.createObjectURL(blob); a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        if (msg) msg.textContent = name + ' を保存しました。';
+      };
+    }
+    F.app.oninput = null;
+    bar();
+    document.getElementById('rdate').onchange = function () {
+      try { sessionStorage.setItem('repro.date', this.value || localDate()); } catch (e) { /* なくてもよい */ }
+      renderReport();
+    };
+  }
+
   // ---------- 1頭の所見 ----------
   function cowRow() { return listNow().filter(function (c) { return c.cow_id === S.open; })[0] || null; }
   var current = null;                                   // いま開いている1件（控えの形）
@@ -398,7 +663,7 @@
   function renderCow() {
     if (F.tabOf() !== 'repro') return;
     var c = cowRow(), led = F.byId()[S.open] || {};
-    if (!S.mode) S.mode = c && !isPreg(c) ? '検診' : (c ? '妊鑑' : '検診');
+    if (!S.mode) S.mode = c ? (inTab(c, S.tab) ? S.tab : (isPreg(c) ? '妊鑑' : '検診')) : '検診';
     var kind = MODES[S.mode][0];
     current = recFor(S.open, workDate(), kind);
     // 妊鑑・検診のどちらでも同じものを上に出す（2026-11-10 本人「乳量、DIM、直近の乳検の乳脂、乳蛋白、MUN もみたい」）
@@ -418,14 +683,15 @@
         '）P/F ' + F.n(c.pf_ratio, 2) + '</div>' : '') +
       (c && c.note ? '<div class="small">' + F.esc(c.note) + '</div>' : '') +
       '<div class="small muted" id="rscore">前回の BCS・RF を読んでいます…</div>' +
-      '</div>' + head('') +
+      '</div>' +
       '<div class="seg">' + Object.keys(MODES).map(function (m) {
         return '<button type="button" data-mode="' + m + '"' + (S.mode === m ? ' class="on"' : '') + '>' + MODES[m][0] + '</button>';
       }).join('') + '</div>' +
-      '<div class="pickers"><label class="small muted" for="rdate">入力の日</label><input id="rdate" type="date" value="' + workDate() + '"></div>' +
       othersHtml(S.open, workDate(), kind) +
       '<section class="box" id="rform">' + formHtml() + '</section>' +
       '<div class="seg"><button type="button" data-step="-1">‹ 前の牛</button><button type="button" data-step="1" class="primary">次の牛 ›</button></div>' +
+      '<div class="pickers"><label class="small muted" for="rdate">入力の日</label><input id="rdate" type="date" value="' + workDate() + '"></div>' +
+      '<div id="rbar" class="rbar"></div>' +
       '<div id="rprev"></div>';
     F.app.innerHTML = html;
     bar();

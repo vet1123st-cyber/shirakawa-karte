@@ -435,3 +435,6 @@ main { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
 .mm select { min-height: 40px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--chip); color: var(--ink); font-size: 15px; }
 .mm select.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 .opts .mm button.ovdel { background: none; border: none; color: var(--muted, #888); font-size: 20px; }
+
+/* 検診レポートの下見（PDF と同じ絵） */
+.rpage { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; margin-top: 10px; background: #fff; }

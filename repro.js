@@ -1044,13 +1044,23 @@
         F.box('ET（この1年）', '<div class="stats"><div class="stat"><div class="label">移植</div><div class="val">' + y.length + '</div><div class="sub">回</div></div>' +
           '<div class="stat"><div class="label">受胎</div><div class="val">' + (done.length ? Math.round(ok / done.length * 100) + '%' : '—') + '</div><div class="sub">' + ok + '/' + done.length + '（結果の出たもの）</div></div>' +
           '<div class="stat"><div class="label">判定待ち</div><div class="val">' + y.filter(function (r) { return r.result === '判定待ち'; }).length + '</div><div class="sub">移植から90日まで</div></div></div>') +
-        F.box('移植の記録', '<ul class="list">' + rows.map(function (r) {
-          return '<li><span class="d">' + F.day(r.date) + '</span>　<a href="#/cow/' + r.cow_id + '"><b>' + F.no(r.cow_id, r.mgmt_no) + '</b></a> ' +
-            F.esc(r.embryo || '') + (r.donor ? '<span class="small muted">（' + F.esc(r.donor) + '）</span>' : '') +
-            (r.vet ? ' <span class="small muted">' + F.esc(r.vet) + '</span>' : '') +
-            ' <span class="small ' + (cls[r.result] || '') + '">' + F.esc(r.result || '') + '</span></li>';
+        // 2026-11-11 本人「移植日・10桁・ドナー・精液・借り腹（豊西）・凍結体内／凍結IVF」: ET記録（年度の表）から。
+        // 妊鑑は note の頭（「妊鑑＋・…」）、借り腹は 業者か備考に「豊西」
+        F.box('移植の記録', '<ul class="list etlist">' + rows.map(function (r) {
+          var note = r.note || '', m = note.match(/^(妊鑑[^・]*|胚死滅)(・|$)/), preg = m ? m[1] : '', rest = m ? note.slice(m[0].length) : note;
+          var toyo = /豊西/.test((r.maker || '') + note);
+          return '<li><span class="d">' + F.day(r.date) + '</span>　<a href="#/cow/' + r.cow_id + '"><b>' + F.no(r.cow_id, r.mgmt_no) + '</b></a>' +
+            ' <span class="small muted">' + F.esc(r.cow_id) + '</span><br>' +
+            (r.egg_type ? '<span class="chip">' + F.esc(r.egg_type) + '</span> ' : '') +
+            (toyo ? '<span class="chip out">借り腹（豊西）</span> ' : '') +
+            '精液 <b>' + F.esc(r.embryo || '—') + '</b>' + (r.donor ? '・ドナー ' + F.esc(r.donor) : '') +
+            (r.maker ? ' <span class="small muted">' + F.esc(r.maker) + '</span>' : '') +
+            (r.vet ? ' <span class="small muted">' + F.esc(r.vet) + '</span>' : '') + '<br>' +
+            (preg ? '<span class="small ' + (/＋/.test(preg) ? 'ok' : 'hi') + '">' + F.esc(preg) + '</span>　' : '') +
+            '<span class="small ' + (cls[r.result] || '') + '">' + F.esc(r.result || '') + '</span>' +
+            (rest ? ' <span class="small muted">' + F.esc(rest) + '</span>' : '') + '</li>';
         }).join('') + '</ul>' +
-          F.src('TAF の繁殖（ET）と、会社の ET移植アプリ（移植記録.xlsx）。受胎は分娩か在籍牛一覧の分娩予定日で確かめる。ET はこのページでは入れない（ET アプリで入れる）'));
+          F.src('TAF の繁殖（ET）・会社の ET記録（年度の表）・ET移植アプリ。卵の種類・ドナー・精液・妊鑑は ET記録、受胎は分娩か在籍牛一覧の分娩予定日で確かめる。ET はこのページでは入れない'));
       bar();
     }).catch(function (err) {
       F.app.innerHTML = head('et') + '<p class="msg err">読めませんでした（' + F.esc(err.message) + '）。' +

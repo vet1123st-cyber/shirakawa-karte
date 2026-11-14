@@ -93,8 +93,11 @@
   // ---------- 持ちもの ----------
   var S = {
     sub: 'list', list: [], listDate: '', server: [], farm: '', tab: '妊鑑',
-    open: null, mode: '', more: false, ev: null, err: '', edit: false
+    open: null, mode: '', more: false, ev: null, err: '', edit: false,
+    pcDate: '', fix: null, todo: false, hist: 'day', prev: {}, prevAll: {}, since: '', old: {}, oldDates: {}, note: ''
   };
+  function isOwner() { return !!(F && F.role && F.role() === 'owner'); }
+  function nameOf(mail) { return String(mail || '').split('@')[0]; }
   function fieldsOf() { return S.ev ? EVENT[S.ev.kind] : MODES[S.mode][1].concat(S.more ? MORE : []); }
   // いま出している欄から先に探す（発情と処置は同じ名前 detail で中身がちがう。全部から探すと発情のほうを掴んだ）
   function fieldByKey(k) {
@@ -129,8 +132,10 @@
     var s = store();
     return Object.keys(s).map(function (k) { return s[k]; }).filter(function (r) { return !r.sent; });
   }
-  // 牛×日×種類 の1件を探す。自分が入れた行（控え・箱）なら同じ id を使う。ほかの人の行は直せないので、自分の行を新しく作る
-  function recFor(cow, date, kind) {
+  // 牛×日×種類 の1件を探す。自分が入れた行（控え・箱）なら同じ id を使う。
+  // ほかの人が入れていたら、新しい行は作らずその行を開く（2026-11-14 本人「同じ牛を二重に入れない」）:
+  //   管理者（owner）はその行を直せる。ほかの人は見るだけ（ro）。own＝リストの直しは人ごとに自分の行（前のまま）
+  function recFor(cow, date, kind, own) {
     var s = store(), me = F.me();
     var mine = Object.keys(s).map(function (k) { return s[k]; })
       .filter(function (r) { return r.cow_id === cow && r.date === date && r.kind === kind && !r.deleted; })[0];
@@ -139,6 +144,12 @@
       return r.cow_id === cow && r.date === date && r.kind === kind && !r.deleted && r.entered_name === me;
     })[0];
     if (srv) return { id: srv.id, cow_id: cow, date: date, kind: kind, data: srv.data || {}, sent: true };
+    var o = own ? [] : others(cow, date, kind);
+    if (o.length) {
+      var x = o[o.length - 1];
+      return { id: x.id, cow_id: cow, date: date, kind: kind, data: JSON.parse(JSON.stringify(x.data || {})), sent: true,
+               by: x.entered_name || '', ro: !isOwner() };
+    }
     return { id: uuid(), cow_id: cow, date: date, kind: kind, data: {}, sent: true, fresh: true };
   }
   function others(cow, date, kind) {
@@ -148,10 +159,13 @@
     });
   }
   function keep(r) {
+    if (r.ro) return;                                     // 見るだけの行は控えに入れない
     var s = store();
     r.sent = false;
     r.at = Date.now();
     delete r.fresh;
+    // ほかの人の行を管理者が直した・取り消したときは、だれが直したかを中に残す（入れた人の名前は箱が変えない）
+    if (r.by && r.by !== F.me()) { r.data = r.data || {}; r.data.fixed_by = F.me(); }
     s[r.id] = r;
     // 送り終わって14日たった控えは消す（スマホの置き場を食いつぶさない）
     var old = Date.now() - 14 * 86400000;
@@ -168,19 +182,20 @@
     if (!rows.length || sending) { bar(); return Promise.resolve(); }
     sending = true;
     return farmId().then(function (farm) {
-      var stamp = {}, by = {};
-      // 表ごとにまとめて送る（繁殖は input_repro、記録は input_record。記録は牛の代わりに target を持つことがある）
-      rows.forEach(function (r) {
-        stamp[r.id] = r.at;
-        var t = r.table || 'input_repro', row = { id: r.id, farm_id: farm, cow_id: r.cow_id || null, date: r.date, kind: r.kind,
-                                                 data: r.data || {}, deleted: !!r.deleted };
-        if (t === 'input_record') row.target = r.target || null;
-        (by[t] = by[t] || []).push(row);
-      });
-      return Promise.all(Object.keys(by).map(function (t) { return F.upsert(t, by[t]); })).then(function () {
-        var s = store();
-        Object.keys(stamp).forEach(function (id) { if (s[id] && s[id].at === stamp[id]) s[id].sent = true; });
-        store(s);
+      return push(rows, farm).catch(function (err) {
+        // 箱に断られた（403）とき: 1件ずつ送り直し、ほかの人の行を直そうとして断られた分だけ外す。
+        // （管理者がほかの人の行を直す決まりは 2026-11-14 に足した。箱の表.sql を流す前の箱では断られる）
+        if (err.status !== 403) throw err;
+        var bad = null;
+        return rows.reduce(function (p, r) {
+          return p.then(function () {
+            return rows.length > 1 ? push([r], farm) : Promise.reject(err);
+          }).catch(function (e) {
+            if (e.status !== 403) throw e;
+            if (!refused(r)) bad = e;
+          });
+        }, Promise.resolve()).then(function () { if (bad) throw bad; });
+      }).then(function () {
         S.err = '';
         var el = document.getElementById('rrecent');        // 「送信待ち」の字を消す
         if (el) el.innerHTML = recentEvents();
@@ -191,6 +206,31 @@
       S.err = err.status === 404 ? '箱にまだ入力の表がありません（佐藤さんが箱の表を流すと送れます）'
         : (err.status === 401 || err.status === 403 ? '送れませんでした（' + err.message + '）' : '電波が戻ったら送ります');
     }).then(function () { sending = false; bar(); });
+  }
+  // 表ごとにまとめて送る（繁殖は input_repro、記録は input_record。記録は牛の代わりに target を持つことがある）
+  function push(rows, farm) {
+    var stamp = {}, by = {};
+    rows.forEach(function (r) {
+      stamp[r.id] = r.at;
+      var t = r.table || 'input_repro', row = { id: r.id, farm_id: farm, cow_id: r.cow_id || null, date: r.date, kind: r.kind,
+                                               data: r.data || {}, deleted: !!r.deleted };
+      if (t === 'input_record') row.target = r.target || null;
+      (by[t] = by[t] || []).push(row);
+    });
+    return Promise.all(Object.keys(by).map(function (t) { return F.upsert(t, by[t]); })).then(function () {
+      var s = store();
+      Object.keys(stamp).forEach(function (id) { if (s[id] && s[id].at === stamp[id]) s[id].sent = true; });
+      store(s);
+    });
+  }
+  // ほかの人の行の直しが箱に断られた: 控えから外す（箱にある元の入力がそのまま出る）。自分の行なら外さない
+  function refused(r) {
+    if (!r.by || r.by === F.me()) return false;
+    var s = store();
+    delete s[r.id];
+    store(s);
+    S.note = 'ほかの人の入力は直せませんでした（箱の決まりが古いままです。佐藤さんが箱の表を流すと直せます）';
+    return true;
   }
   window.addEventListener('online', function () { if (F) send(); });
 
@@ -214,12 +254,15 @@
     if (!b) return;
     var n = unsent().length;
     b.className = 'rbar' + (n ? ' wait' : '');
-    b.textContent = n ? 'まだ送れていない入力 ' + n + ' 件。' + (S.err || '送っています…') : '入力はぜんぶ送れています';
+    b.className = 'rbar' + (n || S.note ? ' wait' : '');
+    b.textContent = (n ? 'まだ送れていない入力 ' + n + ' 件。' + (S.err || '送っています…') : '入力はぜんぶ送れています') +
+      (S.stale ? '（電波が悪く、前に読んだリストを出しています）' : '') + (S.note ? '　' + S.note : '');
   }
 
   // ---------- 画面の入口 ----------
   function show(hash) {
     F = window.Farm;
+    poll();
     var m = hash.match(/^#\/repro\/cow\/(\d{10})/);
     // 一覧からタップした牛は、タップしたタブ（妊鑑／検診）の入力をすぐ出す（前の牛の種類を引きずらない。2026-11-11 本人）
     if (m) { if (S.open !== m[1]) { S.mode = ''; S.more = false; } S.open = m[1]; S.ev = null; return loadAll().then(renderCow); }
@@ -230,16 +273,152 @@
     return loadAll().then(renderList);
   }
 
+  // 読んだリストと入力は端末にも控える（電波が切れた牛舎で開き直しても、前に読んだリストが出る。2026-11-14）
+  var CACHE = 'farm.repro.cache.v1';
+  function cache(v) {
+    try {
+      if (v === undefined) return JSON.parse(localStorage.getItem(CACHE) || 'null');
+      localStorage.setItem(CACHE, JSON.stringify(v));
+    } catch (e) { return null; }
+  }
   function loadAll() {
+    var c;
     var a = F.get('exam_list?select=*&order=list_date.desc,mgmt_no.asc').then(function (r) {
-      S.listDate = r.length ? r[0].list_date : '';
-      S.list = r.filter(function (x) { return x.list_date === S.listDate; });
-    }).catch(function () { S.list = S.list || []; });
-    var since = localDate(new Date(Date.now() - 30 * 86400000));
-    var b = F.get('input_repro?select=*&date=gte.' + since + '&order=updated_at.asc').then(function (r) { S.server = r || []; })
-      .catch(function (err) { S.err = err.status === 404 ? '箱にまだ入力の表がありません（佐藤さんが箱の表を流すと送れます）' : ''; });
+      S.pcDate = r.length ? r[0].list_date : '';
+      S.list = r.filter(function (x) { return x.list_date === S.pcDate; });
+      S.gotList = true;
+    }).catch(function () {
+      if (S.gotList) return;
+      c = c === undefined ? cache() : c;
+      if (c) { S.pcDate = c.pcDate || ''; S.list = c.list || []; }
+    });
+    S.since = localDate(new Date(Date.now() - 30 * 86400000));
+    var b = fetchInputs().catch(function (err) {
+      S.err = err.status === 404 ? '箱にまだ入力の表がありません（佐藤さんが箱の表を流すと送れます）' : '';
+      if (S.gotServer) return;
+      c = c === undefined ? cache() : c;
+      if (c) { S.server = c.server || []; S.stale = true; }
+    });
     send();
-    return Promise.all([a, b]);
+    return Promise.all([a, b]).then(function () {
+      settle();
+      if (S.gotList && S.gotServer && !S.stale) cache({ pcDate: S.pcDate, list: S.list, server: S.server, at: Date.now() });
+      return ensureDate(workDate());
+    });
+  }
+  // 箱の入力（直近30日）。30日より前の日を見るときは ensureDate がその日だけ読み足す（S.old）
+  function fetchInputs() {
+    return F.get('input_repro?select=*&date=gte.' + S.since + '&order=updated_at.asc').then(function (r) {
+      r = r || [];
+      var ids = {};
+      r.forEach(function (x) { ids[x.id] = 1; });
+      S.server = Object.keys(S.old).map(function (k) { return S.old[k]; }).filter(function (x) { return !ids[x.id]; }).concat(r);
+      S.gotServer = true;
+      S.stale = false;
+    });
+  }
+  function ensureDate(date) {
+    if (!date || date >= S.since || S.oldDates[date]) return Promise.resolve();
+    return F.get('input_repro?select=*&date=eq.' + date + '&order=updated_at.asc').then(function (r) {
+      S.oldDates[date] = 1;
+      (r || []).forEach(function (x) { S.old[x.id] = x; });
+      var ids = {};
+      S.server.forEach(function (x) { ids[x.id] = 1; });
+      S.server = (r || []).filter(function (x) { return !ids[x.id]; }).concat(S.server);
+    }).catch(function () { /* 読めなければ、その日は空で出る */ });
+  }
+
+  // ---------- リストの確定（2026-11-14 本人「リストは確定してから現場で使う」） ----------
+  // 確定＝そのときのリスト（PC の案＋アプリでの直し）を、牛ごとの「リスト」の行に写しておくこと（data.cid＝確定の番号・data.snap＝牛の数字）。
+  // 確定したあとは、PC がリストを作り直しても画面のリストは変わらない（「入れ替える」を押したときだけ替わる）。
+  // いちばん新しい cid の確定が、いまのリスト。箱の表は変えていない（kind「リスト」のまま）
+  function listRows() {
+    var s = store();
+    var mine = Object.keys(s).map(function (k) { return s[k]; }).filter(function (r) { return r.kind === 'リスト'; });
+    var ids = mine.map(function (r) { return r.id; });
+    return mine.concat(S.server.filter(function (r) { return r.kind === 'リスト' && ids.indexOf(r.id) < 0; }));
+  }
+  function settle() {
+    var best = null;
+    listRows().forEach(function (r) {
+      var d = r.data || {};
+      if (r.deleted || !d.cid) return;
+      if (!best || d.cid > best.cid) best = { cid: d.cid, date: r.date, by: d.cby || '', since: d.since || r.date };
+    });
+    S.fix = best;
+    S.listDate = best ? best.date : (S.pcDate || localDate());
+  }
+  // rows = [{ c: 牛の行, removed, added, isNew }]（並び順）。1回の書き込みで控えに入れて送る
+  function fixList(rows, since, date) {
+    var cid = Date.now(), me = F.me(), s = store();
+    rows.forEach(function (x, i) {
+      var c = x.c, rec = recFor(c.cow_id, date, 'リスト', true), snap = Object.assign({}, c);
+      ['pos', 'removed', 'added', 'isNew', 'list_date', 'farm_id'].forEach(function (k) { delete snap[k]; });
+      rec.data = { cid: cid, cby: me, since: since, pos: i * 1000, removed: !!x.removed, added: !!x.added,
+                   tab: isPreg(c) ? '妊鑑' : '検診', snap: snap };
+      if (x.isNew) rec.data.isNew = true;
+      rec.sent = false; rec.at = cid; delete rec.fresh;
+      s[rec.id] = rec;
+    });
+    store(s);
+    settle();
+    clearTimeout(timer);
+    send();
+  }
+  function fixNow() {
+    var rows = listNow().sort(function (a, b) { return a.pos - b.pos; });
+    if (!rows.length) return;
+    fixList(rows.map(function (c) { return { c: c, removed: c.removed, added: c.added }; }), S.listDate, S.listDate);
+  }
+  // PC が作り直した案（S.list）に入れ替える。carry＝足した牛・外した牛・並び・入力済みの印を引き継ぐ（同じ検診の作り直し）。
+  // carry なし＝次の検診のリストとして新しく確定する
+  function swapList(carry) {
+    var pc = {}, rows = [], seen = {};
+    S.list.forEach(function (c) { pc[c.cow_id] = c; });
+    if (carry) {
+      listNow().sort(function (a, b) { return a.pos - b.pos; }).forEach(function (c) {
+        if (pc[c.cow_id]) rows.push({ c: pc[c.cow_id], removed: c.removed });
+        else if (c.added || inputsOf(c.cow_id).length) rows.push({ c: c, removed: c.removed, added: c.added });
+        else return;
+        seen[c.cow_id] = 1;
+      });
+    }
+    S.list.forEach(function (c) { if (!seen[c.cow_id]) rows.push({ c: c, isNew: !!carry }); });
+    fixList(rows, carry && S.fix ? S.fix.since : S.pcDate, S.pcDate);
+  }
+  // 確定したあとに PC が作った新しい案があるか（足される牛・消える牛の数）
+  function draft() {
+    if (!S.fix || !S.list.length) return null;
+    var cur = {}, pc = {};
+    listNow().forEach(function (c) { cur[c.cow_id] = c; });
+    S.list.forEach(function (c) { pc[c.cow_id] = 1; });
+    var plus = S.list.filter(function (c) { return !cur[c.cow_id]; }).length;
+    var minus = Object.keys(cur).filter(function (id) { return !pc[id] && !cur[id].added && !inputsOf(id).length; }).length;
+    if (S.pcDate < S.fix.date || (S.pcDate === S.fix.date && !plus && !minus)) return null;
+    return { date: S.pcDate, n: S.list.length, plus: plus, minus: minus };
+  }
+
+  // ---------- ほかの人の入力をすぐ出す（2026-11-14 本人「入力は皆の画面にすぐ出る」） ----------
+  // 一覧・レポートを開いているあいだ、25秒ごとと画面に戻ったときに箱を読み直す。変わったときだけ描き直す
+  var pollT = null;
+  function sig() { return S.server.length + ':' + (S.server.length ? S.server[S.server.length - 1].updated_at : ''); }
+  function tick() {
+    if (document.hidden || !F || F.tabOf() !== 'repro') return;
+    var h = location.hash, onList = /^#\/repro\/?$/.test(h), onRep = /^#\/repro\/report/.test(h);
+    if (!onList && !onRep) return;
+    var before = sig();
+    fetchInputs().then(function () {
+      settle();
+      if (sig() === before || location.hash !== h || S.edit) return;
+      var a = document.activeElement;
+      if (a && a.id === 'rq' && a.value) return;          // 4桁で探している最中は描き直さない
+      if (onList) renderList(); else renderReport();
+    }).catch(function () { /* 電波が無ければ次の回に */ });
+  }
+  function poll() {
+    if (pollT) return;
+    pollT = setInterval(tick, 25000);
+    document.addEventListener('visibilitychange', tick);
   }
 
   function head(active) {
@@ -249,11 +428,83 @@
     }).join('') + '</div><div id="rbar" class="rbar"></div>';
   }
 
+  // 入力の日（2026-11-14 本人「日付が一番上に来てほしい」: 一覧・1頭・発情処置のどれも、いちばん上に出す）
+  function datePicker(v, label) {
+    return '<div class="pickers rdate"><label class="small muted" for="rdate">' + (label || '入力の日') + '</label>' +
+      '<input id="rdate" type="date" value="' + (v || workDate()) + '"></div>';
+  }
+  function setWorkDate(v) {
+    try { sessionStorage.setItem('repro.date', v || localDate()); } catch (e) { /* なくてもよい */ }
+  }
+
+  // 入力の履歴（2026-11-14 本人「入力履歴が取り消しできるように」）。この日に入れた妊鑑・検診・発情・処置。
+  // 自分が入れた分だけ「取り消す」を出す（ほかの人の分は直せない。箱には「取り消し」として残る）
+  var KIND_SHORT = { '妊娠鑑定': '妊鑑', '繁殖検診': '検診', '発情': '発情', '処置': '処置' };
+  // date を渡すとその日だけ、渡さないと読んである分ぜんぶ（直近30日）。gone＝取り消した入力のほう。
+  // 取り消せるのは入れた本人と管理者（owner）。2026-11-14 本人「過去の分も、誤りがあれば消せる。消した記録は取り消しとして残す」
+  function historyRows(date, gone) {
+    var s = store(), me = F.me(), boss = isOwner();
+    var mine = Object.keys(s).map(function (k) { return s[k]; }).filter(function (r) { return KIND_SHORT[r.kind]; });
+    var ids = mine.map(function (r) { return r.id; });
+    return mine.concat(S.server.filter(function (r) { return KIND_SHORT[r.kind] && ids.indexOf(r.id) < 0; }))
+      .filter(function (r) { return !!r.deleted === !!gone && (!date || r.date === date) && r.data && Object.keys(r.data).length; })
+      .map(function (r) {
+        r._who = r.by || r.entered_name || '';
+        r._can = boss || (ids.indexOf(r.id) >= 0 && !r.by) || r.entered_name === me;
+        return r;
+      })
+      .sort(function (a, b) { return String(b.date).localeCompare(String(a.date)) || stamp(b) - stamp(a); });
+  }
+  function stamp(r) { return r.at || (r.updated_at ? Date.parse(r.updated_at) : 0) || 0; }
+  function historyLine(r, all, gone) {
+    var led = F.byId()[r.cow_id] || {}, d = r.data || {}, me = F.me();
+    var what = (r.kind === '発情' || r.kind === '処置')
+      ? [].concat(d.detail || []).join('・') + (d.drug ? '（' + d.drug + '）' : '') + (d.note ? ' ' + d.note : '')
+      : sumAll(d);
+    var t = stamp(r) ? new Date(stamp(r)) : null;
+    var hm = t ? t.getHours() + ':' + ('0' + t.getMinutes()).slice(-2) : '';
+    return '<li' + (gone ? ' class="gone"' : '') + '><span class="d">' + (all ? F.md(r.date) + ' ' : '') + hm + '</span>　' +
+      '<a href="#/repro/cow/' + r.cow_id + '"><b>' + F.no(r.cow_id, led.mgmt_no) + '</b></a> ' +
+      '<span class="chip">' + KIND_SHORT[r.kind] + '</span> <span class="what">' + F.esc(what) + '</span>' +
+      (r.sent === false ? ' <span class="small warn">送信待ち</span>' : '') +
+      (r._who && r._who !== me ? ' <span class="small muted">（' + F.esc(nameOf(r._who)) + '）</span>' : '') +
+      (r._can ? ' <button type="button" class="link' + (gone ? '' : ' danger') + '" data-' + (gone ? 'redo' : 'undo') + '-id="' + r.id + '">' +
+                (gone ? '戻す' : '取り消す') + '</button>' : '') + '</li>';
+  }
+  function historyHtml(date) {
+    var all = S.hist === 'all', rows = historyRows(all ? null : date), gone = historyRows(all ? null : date, true);
+    var seg = '<div class="seg rhseg"><button type="button" data-hist="day"' + (all ? '' : ' class="on"') + '>' + F.md(date) + ' の分</button>' +
+      '<button type="button" data-hist="all"' + (all ? ' class="on"' : '') + '>30日ぶん</button></div>';
+    return F.box('入力の履歴（' + (all ? '直近30日' : F.day(date)) + '・' + rows.length + '件）', seg +
+      (rows.length ? '<ul class="list rhist">' + rows.slice(0, 300).map(function (r) { return historyLine(r, all); }).join('') + '</ul>'
+                   : F.none(all ? '入力はまだありません。' : 'この日の入力はまだありません。もっと前の日は、いちばん上の「入力の日」を変えると出ます。')) +
+      (gone.length ? '<details class="rgone"><summary>取り消した入力（' + gone.length + '件）</summary><ul class="list rhist">' +
+        gone.slice(0, 100).map(function (r) { return historyLine(r, all, true); }).join('') + '</ul></details>' : '') +
+      '<p class="small muted">取り消せるのは、入れた本人と管理者です。取り消した入力は箱に「取り消し」として残り、PC の記録からは次の取り込みで外れます。</p>');
+  }
+  // 箱から来た行でも、控えに「取り消し」として入れて送る（ほかの人の行は管理者だけ。箱が確かめる）。back＝取り消しを戻す
+  function undoById(id, back) {
+    var s = store(), r = s[id];
+    if (!r) {
+      var srv = S.server.filter(function (x) { return x.id === id; })[0];
+      if (!srv) return false;
+      r = { id: srv.id, cow_id: srv.cow_id, date: srv.date, kind: srv.kind, data: JSON.parse(JSON.stringify(srv.data || {})) };
+      if (srv.entered_name !== F.me()) r.by = srv.entered_name || '';
+    }
+    var no = String((F.byId()[r.cow_id] || {}).mgmt_no || r.cow_id.slice(-5, -1));
+    if (!confirm(no + ' の' + r.kind + '（' + F.md(r.date) + '）の入力を' + (back ? '戻しますか？' : '取り消しますか？\n（箱には「取り消し」として残ります）'))) return false;
+    r.deleted = !back;
+    keep(r);
+    S.server.forEach(function (x) { if (x.id === id) x.deleted = !back; });
+    return true;
+  }
+
   // ---------- 検診リスト ----------
   function isPreg(c) { return String(c.reason || '').indexOf('妊鑑') >= 0; }
   function inTab(c, tab) { return byTab(tab).some(function (x) { return x.cow_id === c.cow_id; }); }
   function inputsOf(cow) {
-    var s = store(), d = S.listDate || workDate();
+    // 入力済みの印は、確定したリストなら確定の日（作り直しで引き継いだときは最初の確定の日）から後の入力
+    var s = store(), d = S.fix ? S.fix.since : (S.listDate || workDate());
     var mine = Object.keys(s).map(function (k) { return s[k]; })
       .filter(function (r) { return r.cow_id === cow && r.date >= d && !r.deleted && (r.kind === '妊娠鑑定' || r.kind === '繁殖検診'); });
     var ids = mine.map(function (r) { return r.id; });
@@ -277,6 +528,12 @@
     if (r.plan) bits.push(r.plan + (r.plan_days ? '(' + r.plan_days + '日後)' : ''));
     return bits.join(' / ') || '入力あり';
   }
+  // 要約に BCS・RF も添える（一覧の ✓・履歴・下の OK バー）
+  function sumAll(r) {
+    r = r || {};
+    var s = summary(r), x = [r.bcs != null ? 'BCS' + Number(r.bcs).toFixed(2) : '', r.rumen_fill != null ? 'RF' + r.rumen_fill : ''].filter(Boolean).join('・');
+    return x ? (s === '入力あり' ? x : s + ' / ' + x) : s;
+  }
   // ---------- リストを直す（2026-11-10 本人「PC で作り、アプリで直す」） ----------
   // 1頭×リストの日 で input_repro の kind「リスト」1行。data = { added, removed, tab, pos }。
   // 3人が直すので、牛ごとに**いちばん新しく直した行**が勝つ（直せるのは自分の行だけ＝箱の決まり。ほかの人の直しは自分の新しい行で上書きされる）。
@@ -291,6 +548,8 @@
     var by = {};
     editRows().forEach(function (r) {
       if (r.deleted) return;
+      // 確定したあとは、その確定の行だけを見る（前の確定のときの直しが、あとから届いても混ぜない）
+      if (S.fix && (r.data || {}).cid !== S.fix.cid) return;
       var t = r.at || Date.parse(r.updated_at) || 0;
       if (!by[r.cow_id] || by[r.cow_id].t < t) by[r.cow_id] = { t: t, d: r.data || {} };
     });
@@ -299,6 +558,16 @@
   // PC が作ったリスト ＋ アプリでの直し。pos は並び（PC の並びを 1000 おきに置き、動かした牛だけ間に入れる）
   function listNow() {
     var ed = edits(), out = [], seen = {};
+    if (S.fix) {
+      // 確定したリスト: 牛の数字は確定のときの写し（snap）。PC の案（S.list）は見ない
+      Object.keys(ed).forEach(function (id) {
+        var d = ed[id].d, led = F.byId()[id] || {};
+        out.push(Object.assign({ mgmt_no: led.mgmt_no, reason: d.tab === '妊鑑' ? '手で追加・妊鑑' : '手で追加' }, d.snap || {},
+                               { cow_id: id, added: !!d.added, removed: !!d.removed, isNew: !!d.isNew,
+                                 pos: d.pos != null ? d.pos : 1e9 + ed[id].t / 1e6 }));
+      });
+      return out;
+    }
     S.list.forEach(function (c, i) {
       seen[c.cow_id] = 1;
       var e = ed[c.cow_id], row = Object.assign({}, c, { pos: i * 1000 });
@@ -320,8 +589,9 @@
   }
   function setEdit(cow, patch) {
     if (!S.listDate) return;
-    var cur = edits()[cow], rec = recFor(cow, S.listDate, 'リスト');
+    var cur = edits()[cow], rec = recFor(cow, S.listDate, 'リスト', true);
     rec.data = Object.assign({}, cur ? cur.d : {}, patch);
+    if (S.fix) { rec.data.cid = S.fix.cid; rec.data.cby = S.fix.by; rec.data.since = S.fix.since; }
     keep(rec);
     renderList();
   }
@@ -334,30 +604,57 @@
 
   function renderList() {
     if (F.tabOf() !== 'repro') return;
-    var html = head('list');
-    if (!S.list.length) {
-      html += F.box('検診リスト', F.none('リストがまだ箱にありません。訪問の前に PC で「J_検診リストを作る」を押すと出ます。'));
+    var html = head('list') + datePicker() +
+      // 4桁で探す（2026-11-14 本人）。リストの牛もリストに無い牛も、ここから開ける
+      '<div class="rsearch"><input id="rq" type="search" inputmode="numeric" pattern="[0-9]*" placeholder="4桁で探す" autocomplete="off" aria-label="4桁で探す">' +
+      '<ul class="hits" id="rhits"></ul></div>';
+    var now = listNow();
+    if (!now.length) {
+      html += F.box('検診リスト', F.none('リストがまだ箱にありません。訪問の前に PC で「J_検診リストを作る」を押すと出ます。' +
+        '上の「4桁で探す」から牛を足して、ここでリストを作ることもできます。'));
     } else {
-      var tabs = ['妊鑑', '検診'], n = listNow().filter(function (c) { return !c.removed; }).length;
-      html += '<div class="head"><div class="name"><b>検診リスト</b></div><div class="id">' + F.day(S.listDate) + ' に作ったリスト・' +
-        n + ' 頭（入力の日 ' + F.day(workDate()) + '）</div>' +
+      var tabs = ['妊鑑', '検診'], act = now.filter(function (c) { return !c.removed; }), n = act.length;
+      var left = act.filter(function (c) { return !inputsOf(c.cow_id).length; }).length, dr = draft();
+      html += '<div class="head"><div class="name"><b>検診リスト</b></div><div class="id">' +
+        (S.fix ? '<span class="ok">✓ 確定</span>（' + F.md(S.fix.date) + (S.fix.by ? ' ' + F.esc(nameOf(S.fix.by)) : '') + '）・' + n + ' 頭'
+               : F.day(S.listDate) + ' に PC が作った案・' + n + ' 頭') + '</div>' +
         '<button type="button" class="link" data-edit="1">' + (S.edit ? '✓ 直し終わり' : '✎ リストを直す（足す・外す・並べ替え）') + '</button>' +
-        '<a class="link" href="#/repro/report">📄 今日の検診レポート（PDF）</a></div>' +
+        '<a class="link" href="#/repro/report">📄 一覧とレポート（PDF）</a></div>';
+      // 確定の帯。まだなら大きなボタン、確定したあとに PC の新しい案があれば入れ替えを選べる
+      if (!S.fix) {
+        html += '<div class="rnote warn"><b>まだ確定していません。</b>足す・外す・並べ替えをしてから確定すると、PC がリストを作り直しても、このリストは変わりません。' +
+          '<button type="button" class="wide primary" data-fix="1">このリストで確定する（' + n + ' 頭）</button></div>';
+      } else if (dr) {
+        html += '<div class="rnote"><b>PC の新しい案があります</b>（' + F.md(dr.date) + ' 作成・' + dr.n + ' 頭。いまのリストに無い牛 ' + dr.plus +
+          ' 頭・案から消えた牛 ' + dr.minus + ' 頭）。<div class="seg"><button type="button" data-swap="1">入れ替える<br><span class="small">足した牛・外した牛・並び・✓ を引き継ぐ</span></button>' +
+          '<button type="button" data-swap="0">次の検診として確定<br><span class="small">引き継がない</span></button></div></div>';
+      }
+      html += '<div class="rleft">' + (left ? '<b>残り ' + left + ' 頭</b>' : '<b class="ok">✓ 全頭 入力済み</b>') +
+        '<span class="small muted">（全 ' + n + ' 頭・済み ' + (n - left) + '）</span>' +
+        (left ? '<button type="button" class="chipbtn' + (S.todo ? ' on' : '') + '" data-todo="1">未入力だけ</button>'
+              : '<a class="chipbtn on" href="#/repro/report">一覧とレポートへ</a>') + '</div>' +
         '<div class="seg">' + tabs.map(function (t) {
           var rows = byTab(t), done = rows.filter(function (c) { return inputsOf(c.cow_id).length; }).length;
           return '<button type="button" data-rtab="' + t + '"' + (S.tab === t ? ' class="on"' : '') + '>' +
             (t === '妊鑑' ? '妊娠鑑定' : '繁殖検診') + ' ' + done + '/' + rows.length + '</button>';
         }).join('') + '</div>';
-      html += '<ul class="hits">' + byTab(S.tab).map(function (c) {
+      var shown = byTab(S.tab).filter(function (c) { return S.edit || !S.todo || !left || !inputsOf(c.cow_id).length; });
+      if (!shown.length) html += F.none(byTab(S.tab).length ? 'このタブの牛はぜんぶ入力済みです。' : 'このタブの牛はいません。');
+      html += '<ul class="hits">' + shown.map(function (c) {
         var got = inputsOf(c.cow_id);
         var facts = [c.parity != null ? c.parity + '産' : '', c.dim != null ? 'DIM ' + c.dim : '',
                      c.days_after_ai != null ? 'AI後' + c.days_after_ai + '日' : '', c.last_semen || '',
                      c.milk_kg != null ? F.n(c.milk_kg, 1) + 'kg' : ''].filter(Boolean).join('・');
+        var me = F.me();
         var body = '<span class="no">' + F.no(c.cow_id, c.mgmt_no) + '</span><span>' + F.esc(c.reason || '') +
+          (c.isNew ? ' <span class="chip out">新</span>' : '') +
           (c.repro_status ? '<span class="small muted">（' + F.esc(c.repro_status) + '）</span>' : '') +
           (facts ? '<br><span class="small muted">' + F.esc(facts) + '</span>' : '') +
           (c.note ? '<br><span class="small">' + F.esc(c.note) + '</span>' : '') +
-          (got.length ? '<br><span class="small ok">✓ ' + F.esc(got.map(function (r) { return summary(r.data); }).join('｜')) + '</span>' : '') +
+          (got.length ? '<br><span class="small ok">✓ ' + F.esc(got.map(function (r) {
+            var who = r.by || r.entered_name || '';
+            return sumAll(r.data) + (who && who !== me ? '（' + nameOf(who) + '）' : '');
+          }).join('｜')) + '</span>' : '') +
           '</span>';
         if (S.edit) {
           return '<li class="editrow"><div class="editbody">' + body + '</div><div class="editbtns">' +
@@ -365,7 +662,7 @@
             '<button type="button" data-down="' + c.cow_id + '" aria-label="下へ">↓</button>' +
             '<button type="button" class="danger" data-rm="' + c.cow_id + '">外す</button></div></li>';
         }
-        return '<li><a href="#/repro/cow/' + c.cow_id + '"' + (got.length ? ' class="done"' : '') + '>' + body + '</a></li>';
+        return '<li id="rc' + c.cow_id + '"><a href="#/repro/cow/' + c.cow_id + '"' + (got.length ? ' class="done"' : '') + '>' + body + '</a></li>';
       }).join('') + '</ul>';
       var gone = byTab('妊鑑', true).concat(byTab('検診', true));
       if (gone.length) {
@@ -375,15 +672,35 @@
         }).join('') + '</ul>');
       }
     }
-    html += F.box(S.list.length ? 'リストに無い牛（診る・リストに足す）' : 'リストに無い牛',
-      '<input id="rq" type="search" inputmode="numeric" pattern="[0-9]*" placeholder="4桁" autocomplete="off" aria-label="4桁">' +
-      '<ul class="hits" id="rhits"></ul>');
+    html += historyHtml(workDate());
     F.app.innerHTML = html;
     bar();
     F.app.oninput = null;
+    // OK で戻ってきたら、いま入れた牛の行を見せる
+    if (S.back) {
+      var el = document.getElementById('rc' + S.back);
+      S.back = null;
+      if (el) { el.scrollIntoView({ block: 'center' }); el.classList.add('flash'); }
+    }
+    document.getElementById('rdate').onchange = function () {
+      setWorkDate(this.value);
+      ensureDate(workDate()).then(renderList);
+    };
     F.app.onclick = function (e) {
       var b = e.target.closest('button');
       if (!b) return;
+      if (b.hasAttribute('data-undo-id')) { if (undoById(b.getAttribute('data-undo-id'))) renderList(); return; }
+      if (b.hasAttribute('data-redo-id')) { if (undoById(b.getAttribute('data-redo-id'), true)) renderList(); return; }
+      if (b.hasAttribute('data-hist')) { S.hist = b.getAttribute('data-hist'); return renderList(); }
+      if (b.hasAttribute('data-todo')) { S.todo = !S.todo; return renderList(); }
+      if (b.hasAttribute('data-fix')) { fixNow(); S.edit = false; return renderList(); }
+      if (b.hasAttribute('data-swap')) {
+        var carry = b.getAttribute('data-swap') === '1';
+        if (!confirm(carry ? 'PC の新しい案に入れ替えます。足した牛・外した牛・並び・入力済みの印は引き継ぎます。よいですか？'
+                           : 'PC の新しい案を、次の検診のリストとして確定します。いまのリストの直しは引き継ぎません。よいですか？')) return;
+        swapList(carry);
+        return renderList();
+      }
       if (b.hasAttribute('data-rtab')) { S.tab = b.getAttribute('data-rtab'); return renderList(); }
       if (b.hasAttribute('data-edit')) { S.edit = !S.edit; return renderList(); }
       if (b.hasAttribute('data-up')) return move(b.getAttribute('data-up'), -1);
@@ -400,9 +717,12 @@
     q.oninput = function () {
       var on = {};
       listNow().forEach(function (c) { if (!c.removed) on[c.cow_id] = 1; });
+      var lc = {};
+      listNow().forEach(function (c) { lc[c.cow_id] = c; });
       hits.innerHTML = F.find(q.value).slice(0, 8).map(function (c) {
+        var l = lc[c.cow_id], tag = l ? (l.removed ? 'リストから外した牛' : 'リスト：' + (l.reason || '')) : 'リストに無い牛';
         return '<li class="editrow"><a class="editbody" href="#/repro/cow/' + c.cow_id + '"><span class="no">' + F.no(c) + '</span><span>' +
-          F.esc(c.name || '') + '<br><span class="small muted">' + F.day(c.birth_date) + '生</span></span></a>' +
+          F.esc(c.name || '') + '<br><span class="small muted">' + F.esc(tag) + '・' + F.day(c.birth_date) + '生</span></span></a>' +
           (S.listDate && !on[c.cow_id] ? '<div class="editbtns"><button type="button" data-add="' + c.cow_id + '">＋ ' +
             (S.tab === '妊鑑' ? '妊鑑' : '検診') + 'に足す</button></div>' : '') + '</li>';
       }).join('');
@@ -464,11 +784,25 @@
       o.text = [o.preg_check === '＋' ? '妊娠＋' : o.preg_check === '−' ? '−' : (o.preg_check || ''),
                 o.twin && o.twin !== '単胎' ? o.twin : '', ov('右', o.ov_right), ov('左', o.ov_left),
                 o.uterus && o.uterus !== '正常' ? o.uterus : '', o.m_score != null ? 'm' + o.m_score : '',
-                tr.join(' '), o.drug ? '（' + o.drug + '）' : '',
-                o.bcs != null ? 'BCS' + o.bcs : '', o.rumen_fill != null ? 'RF' + o.rumen_fill : '', o.note || '']
+                tr.join(' '), o.drug ? '（' + o.drug + '）' : '', o.note || '']
         .filter(Boolean).join(' ');
+      o.prev = S.prevAll[id] || {};                       // 前回の BCS・RF（renderReport が先に読む）
       return o;
     });
+    // BCS・RF は前回と並べた表にする（2026-11-14 本人「前回の値と並べて見たい」）
+    var fmt = function (v, fx) { return v == null ? '—' : Number(v).toFixed(fx); };
+    var was = function (p, fx) { return p ? p.v.toFixed(fx) + '（' + md(p.date) + '）' : '—'; };
+    var dif = function (v, p, fx) {
+      if (v == null || !p) return '';
+      var x = Number(v) - p.v;
+      return (x > 0 ? '+' : x < 0 ? '−' : '±') + Math.abs(x).toFixed(fx);
+    };
+    var scores = cows.filter(function (o) { return o.bcs != null || o.rumen_fill != null; })
+      .sort(function (a, b) { return a.no.localeCompare(b.no); })
+      .map(function (o) {
+        return [o.no, fmt(o.bcs, 2), was(o.prev.bcs, 2), dif(o.bcs, o.prev.bcs, 2),
+                fmt(o.rumen_fill, 0), was(o.prev.rumen_fill, 0), dif(o.rumen_fill, o.prev.rumen_fill, 0)];
+      });
     var order = ['妊娠＋', '妊娠せず', '再妊鑑', '流産・胚死滅', 'SS', 'シダー', 'PG', '薬注', '発情', '出血', '様子見', '除外', '検診のみ'];
     var rank = function (g) { for (var i = 0; i < order.length; i++) if (g.indexOf(order[i]) === 0) return i; return order.length; };
     cows.sort(function (a, b) { return rank(a.group) - rank(b.group) || a.group.localeCompare(b.group) || a.no.localeCompare(b.no); });
@@ -509,7 +843,8 @@
     push(nos(has('除外')), '繁殖から除外（次の分娩まで検診リストに載せません）');
     // 5. 確認事項
     var check = [];
-    var miss = listNow().filter(function (c) { return !c.removed && !by[c.cow_id]; }).map(function (c) { return String(c.mgmt_no || ''); });
+    var missRows = listNow().filter(function (c) { return !c.removed && !by[c.cow_id]; }).sort(function (a, b) { return a.pos - b.pos; });
+    var miss = missRows.map(function (c) { return String(c.mgmt_no || ''); });
     if (miss.length) check.push('今回記載のない牛（' + miss.join('、') + '）：未検診');
     var nomm = nos(function (o) {
       return parseOv(o.ov_left).concat(parseOv(o.ov_right)).some(function (x) { return (x.t === 'CL' || x.t === 'F') && !x.mm; });
@@ -518,7 +853,7 @@
     var nopc = listNow().filter(function (c) { return !c.removed && isPreg(c) && by[c.cow_id] && !by[c.cow_id].preg_check; })
       .map(function (c) { return String(c.mgmt_no || ''); });
     if (nopc.length) check.push(nopc.join('、') + '：妊娠鑑定の結果が未入力');
-    return { date: d, cows: cows, groups: groups, sched: sched, other: other, plan: plan, check: check };
+    return { date: d, cows: cows, groups: groups, sched: sched, other: other, plan: plan, check: check, scores: scores, miss: missRows };
   }
 
   // canvas に描く（A4 を 150dpi で 1240×1754）
@@ -589,9 +924,14 @@
     table(['区分', '頭数'], sum.concat([tot]), [300, 200], ['left', 'right']);
     h2('2. 区分別の結果');
     table(['区分', '牛番号', '所見・処置'], R.cows.map(function (o) { return [o.group, o.no, o.text]; }), [250, 130, W - 2 * M - 380], ['left', 'right', 'left']);
-    h2('3. 次回までの予定（案）');
+    h2('3. BCS・ルーメンフィル（前回との比較）');
+    if (R.scores.length) {
+      table(['牛番号', 'BCS', '前回', '差', 'RF', '前回', '差'], R.scores, [130, 120, 230, 110, 100, 230, 110],
+            ['right', 'center', 'center', 'center', 'center', 'center', 'center']);
+    } else para('・今回 BCS・ルーメンフィルの記録はありません');
+    h2('4. 次回までの予定（案）');
     (R.plan.length ? R.plan : ['とくになし']).forEach(function (t) { para('・' + t); });
-    h2('4. 処置表（SS＝ショートシンク。処置はすべて午前）');
+    h2('5. 処置表（SS＝ショートシンク。処置はすべて午前）');
     if (R.sched.length) {
       table(['牛番号', 'PG', 'PG', 'E2', '発情', '内容'], R.sched, [130, 230, 130, 130, 130, W - 2 * M - 750],
             ['right', 'center', 'center', 'center', 'center', 'left']);
@@ -599,7 +939,7 @@
       para('※「済」は獣医が当日に打った分です。「抜去＋PG」はシダーを抜いて PG を打つ日です。');
     } else para('・今回 SS・シダー・PG の牛はいません');
     R.other.forEach(function (t) { para('・' + t); });
-    h2('5. 確認事項');
+    h2('6. 確認事項');
     (R.check.length ? R.check : ['とくになし']).forEach(function (t) { para('・' + t, R.check.length ? '#C00000' : '#000'); });
     return pages;
   }
@@ -636,17 +976,55 @@
     return new Blob(parts, { type: 'application/pdf' });
   }
 
+  // その日に入れた牛の、前回の BCS・RF をまとめて読む（記録の BCS・RFS、PC が取り込んだ検診、箱にある入力）
+  function loadPrevAll(d) {
+    var ids = [];
+    var s = store();
+    Object.keys(s).map(function (k) { return s[k]; }).concat(S.server).forEach(function (r) {
+      if (r.date === d && !r.deleted && (r.kind === '妊娠鑑定' || r.kind === '繁殖検診') && ids.indexOf(r.cow_id) < 0) ids.push(r.cow_id);
+    });
+    if (!ids.length) return Promise.resolve();
+    var q = '?select=cow_id,date,bcs,rumen_fill&cow_id=in.(' + ids.join(',') + ')&date=lt.' + d;
+    var q1 = F.get('cow_score' + q + '&order=date.desc&limit=1000').catch(function () { return []; });
+    var q2 = F.get('v_repro_exam' + q + '&or=(bcs.not.is.null,rumen_fill.not.is.null)&order=date.desc&limit=1000').catch(function () { return []; });
+    return Promise.all([q1, q2]).then(function (r) {
+      var all = (r[0] || []).concat(r[1] || [], boxScores(ids, d)), out = {};
+      ids.forEach(function (id) { out[id] = pickPrev(all.filter(function (x) { return x.cow_id === id; })); });
+      S.prevAll = out;
+    });
+  }
+  // 一覧とレポート（2026-11-14）: 上に入れた結果の一覧（行を押すと直せる）と未入力の牛、下に農家へ渡す PDF
   function renderReport() {
     if (F.tabOf() !== 'repro') return;
-    var d = workDate(), R = reportData(d);
+    var d = workDate();
+    return loadPrevAll(d).then(function () { if (F.tabOf() === 'repro' && /^#\/repro\/report/.test(location.hash)) paintReport(d); });
+  }
+  function paintReport(d) {
+    var R = reportData(d);
     var html = '<a class="back" href="#/repro">← リスト</a>' +
-      '<div class="head"><div class="name"><b>検診レポート</b></div><div class="id">' + F.day(d) + ' に入れた ' + R.cows.length + ' 頭</div></div>' +
-      '<div class="pickers"><label class="small muted" for="rdate">入力の日</label><input id="rdate" type="date" value="' + d + '"></div>' +
+      '<div class="pickers rdate"><label class="small muted" for="rdate">入力の日</label><input id="rdate" type="date" value="' + d + '"></div>' +
+      '<div class="head"><div class="name"><b>一覧とレポート</b></div><div class="id">' + F.day(d) + ' に入れた ' + R.cows.length + ' 頭' +
+      (R.miss.length ? '・未入力 ' + R.miss.length + ' 頭' : '') + '</div></div>' +
       '<div id="rbar" class="rbar"></div>';
+    if (R.cows.length) {
+      html += F.box('入れた結果（' + R.cows.length + ' 頭）', '<p class="small muted">行を押すと、その牛の入力を直せます。</p><ul class="hits rres">' +
+        R.cows.map(function (o) {
+          var sc = [o.bcs != null ? 'BCS ' + Number(o.bcs).toFixed(2) + '（前回 ' + (o.prev.bcs ? o.prev.bcs.v.toFixed(2) : '—') + '）' : '',
+                    o.rumen_fill != null ? 'RF ' + o.rumen_fill + '（前回 ' + (o.prev.rumen_fill ? o.prev.rumen_fill.v : '—') + '）' : ''].filter(Boolean).join('・');
+          return '<li><a href="#/repro/cow/' + o.cow_id + '"><span class="no">' + F.esc(o.no) + '</span><span><span class="chip">' + F.esc(o.group) + '</span> ' +
+            F.esc(o.text) + (sc ? '<br><span class="small muted">' + F.esc(sc) + '</span>' : '') + '</span></a></li>';
+        }).join('') + '</ul>');
+    }
+    if (R.miss.length) {
+      html += F.box('未入力（' + R.miss.length + ' 頭）', '<p class="rmiss">' + R.miss.map(function (c) {
+        return '<a class="chipbtn" href="#/repro/cow/' + c.cow_id + '">' + F.no(c.cow_id, c.mgmt_no) + '</a>';
+      }).join('') + '</p>');
+    }
     if (!R.cows.length) {
       F.app.innerHTML = html + F.box('レポート', F.none('この日に入れた妊娠鑑定・繁殖検診がまだありません。'));
     } else {
-      html += '<div class="seg"><button type="button" class="primary" data-pdf="1">PDF を送る・保存する</button></div>' +
+      html += '<div class="head"><div class="name"><b>農家さんへ渡すレポート</b></div></div>' +
+        '<div class="seg"><button type="button" class="primary" data-pdf="1">PDF を送る・保存する</button></div>' +
         '<p class="small muted" id="rpdfmsg">ボタンを押すと、LINE やメールなどの送り先を選べます。</p><div id="rpages"></div>';
       F.app.innerHTML = html;
       var pages = drawReport(R), box = document.getElementById('rpages');
@@ -670,8 +1048,8 @@
     F.app.oninput = null;
     bar();
     document.getElementById('rdate').onchange = function () {
-      try { sessionStorage.setItem('repro.date', this.value || localDate()); } catch (e) { /* なくてもよい */ }
-      renderReport();
+      setWorkDate(this.value);
+      ensureDate(workDate()).then(renderReport);
     };
   }
 
@@ -682,16 +1060,27 @@
   function renderCow() {
     if (F.tabOf() !== 'repro') return;
     var c = cowRow(), led = F.byId()[S.open] || {};
-    if (!S.mode) S.mode = c ? (inTab(c, S.tab) ? S.tab : (isPreg(c) ? '妊鑑' : '検診')) : '検診';
+    if (!S.mode) {
+      S.mode = c ? (inTab(c, S.tab) ? S.tab : (isPreg(c) ? '妊鑑' : '検診')) : '検診';
+      // その日にもう入力がある種類を先に開く（入力済みを開いたら「直す」になる。別の種類で新しく入れてしまわない）
+      var has = function (m) { return !recFor(S.open, workDate(), MODES[m][0]).fresh; };
+      if (!has(S.mode)) { var alt = S.mode === '妊鑑' ? '検診' : '妊鑑'; if (has(alt)) S.mode = alt; }
+    }
     var kind = MODES[S.mode][0];
     current = recFor(S.open, workDate(), kind);
+    if (S.prev.cow !== S.open) S.prev = { cow: S.open };
+    var state = current.ro
+      ? '<p class="msg ok"><b>入力済み</b>（' + F.esc(nameOf(current.by)) + ' さん）。直せるのは、入れた本人と管理者です。</p>'
+      : current.fresh ? ''
+      : '<p class="msg ok"><b>入力済み</b>' + (current.by && current.by !== F.me() ? '（' + F.esc(nameOf(current.by)) + ' さんの入力）' : '') +
+        '。新しくは作らず、この入力を直します。</p>';
     // 妊鑑・検診のどちらでも同じものを上に出す（2026-11-10 本人「乳量、DIM、直近の乳検の乳脂、乳蛋白、MUN もみたい」）
     var facts = c && !c.added ? [['産次', c.parity], ['DIM', c.dim], ['ロボ乳量', F.n(c.milk_kg, 1)], ['7日平均', F.n(c.milk_7d, 1)],
                      ['乳脂%', F.n(c.fat_pct, 2)], ['乳蛋白%', F.n(c.protein_pct, 2)], ['MUN', F.n(c.mun, 1)],
                      ['反芻分', F.n(c.rumination_min)]] : [];
     if (c && c.days_after_ai) facts.push(['AI-ET後', c.days_after_ai + '日']);
     if (c && c.ai_count) facts.push(['授精回数', c.ai_count]);
-    var html = '<a class="back" href="#/repro">← リスト</a>' +
+    var html = '<a class="back" href="#/repro">← リスト</a>' + datePicker() +
       '<div class="head"><div class="no">' + F.no(S.open, c && c.mgmt_no) + '</div>' +
       '<div class="id">' + F.esc((c && (c.repro_status || c.reason)) || 'リストに無い牛') + '</div>' +
       (facts.length ? '<div class="facts">' + facts.map(function (f) {
@@ -701,51 +1090,77 @@
       (c && c.test_ym ? '<div class="small muted">乳検 ' + F.esc(c.test_ym) + '（' + F.esc(c.test_age_days) + '日前' + (c.test_flag ? '・' + F.esc(c.test_flag) : '') +
         '）P/F ' + F.n(c.pf_ratio, 2) + '</div>' : '') +
       (c && c.note ? '<div class="small">' + F.esc(c.note) + '</div>' : '') +
-      '<div class="small muted" id="rscore">前回の BCS・RF を読んでいます…</div>' +
       '</div>' +
       '<div class="seg">' + Object.keys(MODES).map(function (m) {
         return '<button type="button" data-mode="' + m + '"' + (S.mode === m ? ' class="on"' : '') + '>' + MODES[m][0] + '</button>';
       }).join('') + '</div>' +
-      othersHtml(S.open, workDate(), kind) +
+      state + (current.by ? '' : othersHtml(S.open, workDate(), kind)) +
       '<section class="box" id="rform">' + formHtml() + '</section>' +
-      '<div class="seg"><button type="button" data-step="-1">‹ 前の牛</button><button type="button" data-step="1" class="primary">次の牛 ›</button></div>' +
-      '<div class="pickers"><label class="small muted" for="rdate">入力の日</label><input id="rdate" type="date" value="' + workDate() + '"></div>' +
+      '<div class="seg"><button type="button" data-step="-1">‹ 前の牛</button><button type="button" data-step="1">次の牛 ›</button></div>' +
       '<div id="rbar" class="rbar"></div>' +
-      '<div id="rprev"></div>';
+      '<div id="rprev"></div>' +
+      // 2026-11-14 本人「記録を入力して OK を押すと、牛一覧に戻るように」。下のタブのすぐ上に貼りつけ、長い画面でも親指で届く
+      '<div class="rokbar"><div class="sbrow"><div class="sbinfo" id="roksum"></div>' +
+      '<button type="button" class="sbbtn" data-ok="1">OK</button></div></div>';
     F.app.innerHTML = html;
     bar();
     F.app.onclick = onClick;
     F.app.oninput = onInput;
-    document.getElementById('rdate').onchange = function () {
-      try { sessionStorage.setItem('repro.date', this.value || localDate()); } catch (e) { /* なくてもよい */ }
-      renderCow();
-    };
+    document.getElementById('rdate').onchange = function () { setWorkDate(this.value); ensureDate(workDate()).then(renderCow); };
+    okSum();
     prevExams();
     prevScore();
   }
+  // 下の OK バーに、いま入っている中身を出す（押し間違いにその場で気づける）
+  function okSum() {
+    var el = document.getElementById('roksum');
+    if (!el || !current) return;
+    var has = current.data && Object.keys(current.data).length && !current.deleted;
+    el.innerHTML = '<b>' + F.no(S.open, (cowRow() || {}).mgmt_no) + '</b> ' +
+      (has ? '<span class="ok">' + F.esc(sumAll(current.data)) + '</span>' : '<span class="muted">まだ入力なし</span>');
+  }
 
-  // 前回の BCS・ルーメンフィル（記録の BCS・RFS と、検診で入れた分のうち新しいほう。項目ごとに）
+  // 前回の BCS・ルーメンフィル（記録の BCS・RFS、PC が取り込んだ検診、箱にある入力のうち新しいほう。項目ごとに）。
+  // BCS・RF の欄の見出しに「前回 3.25（10/26）→ 今回 3.00（−0.25）」と並べ、前回の値のボタンに印を付ける（2026-11-14 本人）
+  function boxScores(ids, before) {
+    return S.server.filter(function (r) {
+      var d = r.data || {};
+      return !r.deleted && ids.indexOf(r.cow_id) >= 0 && r.date < before && (r.kind === '妊娠鑑定' || r.kind === '繁殖検診') &&
+        (d.bcs != null || d.rumen_fill != null);
+    }).map(function (r) { return { cow_id: r.cow_id, date: r.date, bcs: r.data.bcs, rumen_fill: r.data.rumen_fill }; });
+  }
+  function pickPrev(all) {
+    all.sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
+    var pick = function (k) { for (var i = 0; i < all.length; i++) if (all[i][k] != null) return { v: Number(all[i][k]), date: all[i].date }; return null; };
+    return { bcs: pick('bcs'), rumen_fill: pick('rumen_fill') };
+  }
   function prevScore() {
     var cow = S.open, today = workDate();
     var q1 = F.get('cow_score?select=date,bcs,rumen_fill&cow_id=eq.' + cow + '&date=lt.' + today + '&order=date.desc&limit=5').catch(function () { return []; });
     var q2 = F.get('v_repro_exam?select=date,bcs,rumen_fill&cow_id=eq.' + cow + '&date=lt.' + today +
                    '&or=(bcs.not.is.null,rumen_fill.not.is.null)&order=date.desc&limit=5').catch(function () { return []; });
     Promise.all([q1, q2]).then(function (r) {
-      var el = document.getElementById('rscore');
-      if (!el || S.open !== cow) return;
-      var all = (r[0] || []).concat(r[1] || []).sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
-      var pick = function (k) { for (var i = 0; i < all.length; i++) if (all[i][k] != null) return all[i]; return null; };
-      var b = pick('bcs'), f = pick('rumen_fill');
-      el.innerHTML = '前回 BCS <b>' + (b ? F.n(b.bcs, 2) + '</b>（' + F.day(b.date) + '）' : '—</b>') +
-        '・RF <b>' + (f ? F.esc(f.rumen_fill) + '</b>（' + F.day(f.date) + '）' : '—</b>');
+      if (S.open !== cow) return;
+      var p = pickPrev((r[0] || []).concat(r[1] || [], boxScores([cow], today)));
+      S.prev = { cow: cow, bcs: p.bcs, rumen_fill: p.rumen_fill, got: true };
+      ['bcs', 'rumen_fill'].forEach(function (k) { if (document.querySelector('[data-field="' + k + '"]')) paintField(k); });
     });
+  }
+  function prevText(k, cur) {
+    if (S.prev.cow !== S.open || !S.prev.got) return '';
+    var p = S.prev[k], fx = k === 'bcs' ? 2 : 0;
+    if (!p) return '前回 —';
+    var t = '前回 ' + p.v.toFixed(fx) + '（' + F.md(p.date) + '）';
+    if (cur == null || cur === '') return t;
+    var df = Number(cur) - p.v;
+    return t + ' → 今回 ' + Number(cur).toFixed(fx) + '（' + (df > 0 ? '+' : df < 0 ? '−' : '±') + Math.abs(df).toFixed(fx) + '）';
   }
 
   function othersHtml(cow, date, kind) {
     var o = others(cow, date, kind);
-    return o.length ? '<p class="msg ok">ほかの人がこの日に入れています: ' + o.map(function (r) {
-      return F.esc((r.entered_name || '').split('@')[0]) + '「' + F.esc(summary(r.data)) + '」';
-    }).join('、') + '。ここで入れると、あなたの分として別に残ります。</p>' : '';
+    return o.length ? '<p class="msg ok">ほかの人もこの日に入れています: ' + o.map(function (r) {
+      return F.esc(nameOf(r.entered_name)) + '「' + F.esc(sumAll(r.data)) + '」';
+    }).join('、') + '。</p>' : '';
   }
 
   // 前回までの所見（PC が取り込んだ v_repro_exam。きのうまでの分）と発情・処置
@@ -766,6 +1181,8 @@
   function formHtml() {
     var r = current.data, c = cowRow() || {};
     var set = S.ev ? EVENT[S.ev.kind] : MODES[S.mode][1];
+    // 見るだけ（ほかの人の入力を、管理者でない人が開いたとき）
+    if (current.ro) return '<p class="big">' + F.esc(sumAll(r)) + '</p>' + (r.note ? '<p class="small">' + F.esc(r.note) + '</p>' : '');
     return set.map(function (f) { return fieldHtml(f, r, c); }).join('') +
       (S.ev ? '' : '<button type="button" class="more" data-more="1">' + (S.more ? '− ほかを閉じる' : '＋ ほかも入れる（跛行・BHB・直腸温）') + '</button>' +
         (S.more ? MORE.map(function (f) { return fieldHtml(f, r, c); }).join('') : '')) +
@@ -774,7 +1191,8 @@
   function fieldHtml(f, r, c) {
     if (f.when && !f.when(r)) return '';
     var v = r[f.k];
-    var h = '<div class="field' + (f.big ? ' big' : '') + '" data-field="' + f.k + '"><label>' + F.esc(f.label) + '</label>';
+    var h = '<div class="field' + (f.big ? ' big' : '') + '" data-field="' + f.k + '"><label>' + F.esc(f.label) +
+      (!S.ev && (f.k === 'bcs' || f.k === 'rumen_fill') ? ' <span class="prevv" data-prev="' + f.k + '">' + F.esc(prevText(f.k, v)) + '</span>' : '') + '</label>';
     if (f.text) {
       var ph = f.placeholder && c ? (c[f.placeholder] || '') : '';
       h += f.long ? '<textarea data-text="' + f.k + '">' + F.esc(v || '') + '</textarea>'
@@ -800,9 +1218,11 @@
   }
   function optsHtml(f, v) {
     var chosen = f.multi ? [].concat(v || []) : [];
+    var pv = !S.ev && (f.k === 'bcs' || f.k === 'rumen_fill') && S.prev.cow === S.open ? S.prev[f.k] : null;
     var btn = function (o) {
-      var on = f.multi ? chosen.indexOf(o) >= 0 : sameVal(f, v, o);
-      return '<button type="button" data-set="' + f.k + '" data-val="' + F.esc(o) + '"' + (on ? ' class="on"' : '') + '>' + F.esc(o) + '</button>';
+      var on = f.multi ? chosen.indexOf(o) >= 0 : sameVal(f, v, o), was = pv && Number(o) === pv.v;
+      return '<button type="button" data-set="' + f.k + '" data-val="' + F.esc(o) + '"' +
+        (on || was ? ' class="' + (on ? 'on' : '') + (was ? ' was' : '') + '"' : '') + '>' + F.esc(o) + '</button>';
     };
     if (!f.group) return f.opts.map(btn).join('');
     // SS〜5dS は1列のタブ（1つだけ選ぶ）。ほかはその下に並べる
@@ -835,6 +1255,7 @@
     return h;
   }
   function onOv(key, fn) {
+    if (current.ro) return;
     var a = parseOv(current.data[key]);
     fn(a);
     current.data[key] = fmtOv(a);
@@ -845,6 +1266,7 @@
     clean(current.data);
     var wasFresh = !!current.fresh;
     if (!current.deleted) keep(current);
+    okSum();
     if (wasFresh) return repaintForm();
     var box = document.querySelector('[data-field="' + key + '"] .opts');
     if (box) box.innerHTML = ovHtml(fieldByKey(key), current.data[key]);
@@ -853,6 +1275,9 @@
     var box = document.querySelector('[data-field="' + key + '"] .opts');
     var f = fieldByKey(key);
     if (box && f) box.innerHTML = f.ov ? ovHtml(f, current.data[key]) : optsHtml(f, current.data[key]);
+    var pv = document.querySelector('[data-prev="' + key + '"]');
+    if (pv) pv.textContent = prevText(key, current.data[key]);
+    okSum();
   }
   function hasWatcher(key) { return fieldsOf().some(function (f) { return f.watch === key; }); }
   function repaintForm() {
@@ -864,6 +1289,7 @@
   }
 
   function onSet(key, val) {
+    if (current.ro) return;
     var f = fieldByKey(key), r = current.data;
     if (f && f.multi) {
       var cur = [].concat(r[key] || []);
@@ -899,11 +1325,12 @@
       return onOv(sel, function (a) { if (a[si]) a[si].mm = sv ? Number(sv) : null; });
     }
     var k = e.target.getAttribute && e.target.getAttribute('data-text');
-    if (!k || !current) return;
+    if (!k || !current || current.ro) return;
     var f = fieldByKey(k), v = e.target.value;
     current.data[k] = v === '' ? undefined : ((f && (f.num || f.number)) ? Number(v) : v);
     clean(current.data);
     keep(current);
+    okSum();
     if (f && f.free) paintField(k);
   }
 
@@ -930,6 +1357,13 @@
     if (t.hasAttribute('data-mode')) { S.mode = t.getAttribute('data-mode'); return renderCow(); }
     if (t.hasAttribute('data-more')) { S.more = !S.more; return repaintForm(); }
     if (t.hasAttribute('data-step')) return step(+t.getAttribute('data-step'));
+    if (t.hasAttribute('data-ok')) {
+      // 入れたものは押したそばから控えに入っている。ここではすぐ送って、一覧に戻る
+      clearTimeout(timer); send();
+      S.back = S.open; S.mode = ''; S.more = false;
+      location.hash = '#/repro';
+      return;
+    }
     if (t.hasAttribute('data-undo')) {
       if (!confirm('この入力を取り消しますか？（箱には「取り消し」として残ります）')) return;
       current.deleted = true;
@@ -960,13 +1394,12 @@
       current = { id: uuid(), cow_id: ev.cow, date: workDate(), kind: ev.kind, data: {}, fresh: true };
     }
     var led = ev.cow ? (F.byId()[ev.cow] || {}) : null;
-    var html = head('event') +
+    var html = head('event') + datePicker(current.date, '日') +
       '<div class="seg">' + ['発情', '処置'].map(function (k) {
         return '<button type="button" data-kind="' + k + '"' + (ev.kind === k ? ' class="on"' : '') + '>' + k + '</button>';
       }).join('') + '</div>' +
       F.box('牛', (led ? '<p><b class="big">' + F.no(led) + '</b> <span class="small muted">' + F.esc(led.name || '') + '</span></p>' : '') +
         '<input id="eq" type="search" inputmode="numeric" pattern="[0-9]*" placeholder="4桁" autocomplete="off" aria-label="4桁"><ul class="hits" id="ehits"></ul>') +
-      '<div class="pickers"><label class="small muted" for="rdate">日</label><input id="rdate" type="date" value="' + current.date + '"></div>' +
       '<section class="box" id="rform">' + formHtml() + '</section>' +
       '<button type="button" class="wide" data-save="1"' + (ev.cow ? '' : ' disabled') + '>' + (ev.cow ? '残す' : '先に牛を選んでください') + '</button>' +
       '<div id="rrecent">' + recentEvents() + '</div>';
@@ -976,11 +1409,7 @@
       var pick = e.target.closest('[data-cow]');
       if (pick) { e.preventDefault(); S.ev.cow = pick.getAttribute('data-cow'); current = null; return renderEvent(); }
       var undo = e.target.closest('[data-undo-id]');
-      if (undo) {
-        var s = store(), r = s[undo.getAttribute('data-undo-id')];
-        if (r && confirm('この記録を取り消しますか？')) { r.deleted = true; keep(r); renderEvent(); }
-        return;
-      }
+      if (undo) { if (undoById(undo.getAttribute('data-undo-id'))) renderEvent(); return; }
       onClick(e);
     };
     F.app.oninput = onEventInput;

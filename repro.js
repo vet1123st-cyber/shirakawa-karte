@@ -1055,7 +1055,7 @@
             (toyo ? '<span class="chip out">借り腹（豊西）</span> ' : '') +
             '精液 <b>' + F.esc(r.embryo || '—') + '</b>' + (r.donor ? '・ドナー ' + F.esc(r.donor) : '') +
             (r.maker ? ' <span class="small muted">' + F.esc(r.maker) + '</span>' : '') +
-            (r.vet ? ' <span class="small muted">' + F.esc(r.vet) + '</span>' : '') + '<br>' +
+            '<br>' +                                     // 移植した技術者の名前は出さない（2026-11-14 本人）
             (preg ? '<span class="small ' + (/＋/.test(preg) ? 'ok' : 'hi') + '">' + F.esc(preg) + '</span>　' : '') +
             '<span class="small ' + (cls[r.result] || '') + '">' + F.esc(r.result || '') + '</span>' +
             (rest ? ' <span class="small muted">' + F.esc(rest) + '</span>' : '') + '</li>';

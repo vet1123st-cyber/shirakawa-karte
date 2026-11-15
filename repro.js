@@ -44,7 +44,7 @@
   // 処置（2026-11-11 本人。妊鑑・検診で同じ）。SS は「当日」か「何日後に始めるか」を1つだけ選ぶ（3dS = 3日後 SS）
   var SSG = ['SS', '1dS', '2dS', '3dS', '4dS', '5dS'];
   var TREAT_F = { k: 'treatment', label: '処置', multi: true, big: true, group: SSG,
-                  opts: SSG.concat(['シダー', '短縮SS', '蓄膿PG×2', '様子見', '薬注', '発情', '出血', '除外']) };
+                  opts: SSG.concat(['シダー', '短縮SS', '蓄膿PG×2', 'LH', 'E2', '様子見', '薬注', '発情', '出血', '除外']) };   // LH・E2 は 2026-11-15 本人
   var DRUG_F = { k: 'drug', label: '　薬の名前', text: true, watch: 'treatment',
                  when: function (r) { return inList(r.treatment, '薬注'); } };
 
@@ -84,7 +84,7 @@
                opts: ['スタンディング', 'マウンティング', '粘液', '活動量（レリー）', '出血', 'その他'] },
              { k: 'note', label: 'メモ', text: true, long: true }],
     '処置': [{ k: 'detail', label: '処置', multi: true, big: true,
-               opts: ['PG', 'シダー挿入', 'シダー抜去', 'E2', 'GnRH', 'hCG', '洗浄', '薬注', 'その他'] },
+               opts: ['PG', 'シダー挿入', 'シダー抜去', 'E2', 'LH', 'GnRH', 'hCG', '洗浄', '薬注', 'その他'] },
              { k: 'drug', label: '薬の名前', text: true },
              { k: 'note', label: 'メモ', text: true, long: true }]
   };
@@ -839,7 +839,7 @@
       o.no = String((onList[id] && onList[id].mgmt_no) || (led[id] && led[id].mgmt_no) || id.slice(5, 9));
       var tr = o.treatment, has = function (t) { return tr.indexOf(t) >= 0; };
       var ss = tr.filter(function (t) { return t === 'SS' || /^\ddS$/.test(t) || t === '短縮SS'; }).length;
-      var t1 = ss ? 'SS' : has('シダー') ? 'シダー' : has('蓄膿PG×2') ? 'PG' : has('薬注') ? '薬注' : has('発情') ? '発情' :
+      var t1 = ss ? 'SS' : has('シダー') ? 'シダー' : has('蓄膿PG×2') ? 'PG' : has('LH') ? 'LH' : has('E2') ? 'E2' : has('薬注') ? '薬注' : has('発情') ? '発情' :
         has('出血') ? '出血' : has('様子見') ? '様子見' : has('除外') ? '除外' : '';
       o.group = o.preg_check === '＋' ? '妊娠＋' : o.preg_check === '−' ? '妊娠せず' + (t1 ? '・' + t1 : '') :
         o.preg_check ? o.preg_check : (t1 || '検診のみ');
@@ -866,7 +866,7 @@
         return [o.no, fmt(o.bcs, 2), was(o.prev.bcs, 2), dif(o.bcs, o.prev.bcs, 2),
                 fmt(o.rumen_fill, 0), was(o.prev.rumen_fill, 0), dif(o.rumen_fill, o.prev.rumen_fill, 0)];
       });
-    var order = ['妊娠＋', '妊娠せず', '再妊鑑', '流産・胚死滅', 'SS', 'シダー', 'PG', '薬注', '発情', '出血', '様子見', '除外', '検診のみ'];
+    var order = ['妊娠＋', '妊娠せず', '再妊鑑', '流産・胚死滅', 'SS', 'シダー', 'PG', 'LH', 'E2', '薬注', '発情', '出血', '様子見', '除外', '検診のみ'];
     var rank = function (g) { for (var i = 0; i < order.length; i++) if (g.indexOf(order[i]) === 0) return i; return order.length; };
     cows.sort(function (a, b) { return rank(a.group) - rank(b.group) || a.group.localeCompare(b.group) || a.no.localeCompare(b.no); });
     var groups = [];
@@ -902,6 +902,8 @@
     push(nos(has('様子見')), '様子見。次回再検');
     push(nos(has('発情')), '発情。授精・ET の確認');
     push(nos(has('出血')), '出血。次回確認');
+    push(nos(has('LH')), 'LH。次回再検');
+    push(nos(has('E2')), 'E2。次回再検');
     push(nos(has('薬注')), '薬注。次回再検');
     push(nos(has('除外')), '繁殖から除外（次の分娩まで検診リストに載せません）');
     // 5. 確認事項
@@ -1154,6 +1156,8 @@
         '）P/F ' + F.n(c.pf_ratio, 2) + '</div>' : '') +
       (c && c.note ? '<div class="small">' + F.esc(c.note) + '</div>' : '') +
       '</div>' +
+      // 授精・ET の履歴は入力より上（2026-11-15 本人）。種類を切り替えても読み直さず、前に読んだ分をそのまま出す
+      '<div id="rai">' + (S.aiCow === S.open ? S.aiHtml : '<p class="small muted pad">授精・ET の履歴を読んでいます…</p>') + '</div>' +
       '<div class="seg">' + Object.keys(MODES).map(function (m) {
         return '<button type="button" data-mode="' + m + '"' + (S.mode === m ? ' class="on"' : '') + '>' + MODES[m][0] + '</button>';
       }).join('') + '</div>' +
@@ -1164,7 +1168,6 @@
         ? '<div class="rnote warn"><b>繁殖除外中。</b>検診リストには出しません（4桁で探せば開けます）。<button type="button" class="wide" data-excl="0">除外をやめる</button></div>'
         : '<button type="button" class="more" data-excl="1">繁殖除外にする（検診リストに出さない）</button>') +
       '<div id="rbar" class="rbar"></div>' +
-      '<div id="rai"></div>' +
       '<div id="rprev"></div>' +
       // 2026-11-14 本人「記録を入力して OK を押すと、牛一覧に戻るように」。下のタブのすぐ上に貼りつけ、長い画面でも親指で届く
       '<div class="rokbar"><div class="sbrow"><div class="sbinfo" id="roksum"></div>' +
@@ -1184,13 +1187,15 @@
   // 今の産次（最後の分娩より後）を上に出し、何回目の授精かを数える。前の産次は折りたたむ
   function aiHistory() {
     var cow = S.open;
+    if (S.aiCow === cow) return;
+    var put = function (el, html) { S.aiCow = cow; S.aiHtml = html; el.innerHTML = html; };
     F.get('farm_summary?select=date,n,note&section=eq.' + encodeURIComponent('授精履歴') + '&key=eq.' + cow).then(function (r) {
       var el = document.getElementById('rai');
       if (!el || S.open !== cow) return;
       var ev = [];
       try { ev = (JSON.parse((r[0] || {}).note || '{}').e || []).slice(); } catch (e) { ev = []; }
       var src = F.src('TAF の繁殖（報告は授精から中央19日遅れる）と、TAF にまだ無い TimeTree の授精メモ。PC が毎朝まとめる');
-      if (!ev.length) { el.innerHTML = F.box('授精・ET の履歴', F.none('TAF・TimeTree に授精の記録がありません。') + src); return; }
+      if (!ev.length) { put(el, F.box('授精・ET の履歴', F.none('TAF・TimeTree に授精の記録がありません。') + src)); return; }
       // 古い順に数える: 分娩のたびに回数を1に戻す
       var n = 0;
       ev.slice().reverse().forEach(function (x) { if (x[1] === '分娩') n = 0; else if (x[1] === 'AI' || x[1] === 'ET') x.n = ++n; });
@@ -1206,11 +1211,14 @@
       var ais = now.filter(function (x) { return x[1] === 'AI' || x[1] === 'ET'; });
       var head = ais.length ? '今の産次：授精・ET <b>' + ais.length + ' 回</b>・最終 ' + F.md(ais[0][0]) + '（' + F.days(ais[0][0], workDate()) + ' 日前）'
                             : '今の産次：授精・ET の記録はまだありません';
-      el.innerHTML = F.box('授精・ET の履歴', '<p class="small">' + head + '</p>' +
+      put(el, F.box('授精・ET の履歴', '<p class="small">' + head + '</p>' +
         (now.length ? '<ul class="list rai">' + now.map(line).join('') + '</ul>' : '') +
         (old.length ? '<details class="rgone"><summary>前の産次まで（' + old.filter(function (x) { return x[1] === 'AI' || x[1] === 'ET'; }).length +
-          ' 回）</summary><ul class="list rai">' + old.map(line).join('') + '</ul></details>' : '') + src);
-    }).catch(function () { /* 履歴が読めなくても入力はできる */ });
+          ' 回）</summary><ul class="list rai">' + old.map(line).join('') + '</ul></details>' : '') + src));
+    }).catch(function () {
+      var el = document.getElementById('rai');           // 履歴が読めなくても入力はできる
+      if (el && S.open === cow) el.innerHTML = '';
+    });
   }
   // 下の OK バーに、いま入っている中身を出す（押し間違いにその場で気づける）
   function okSum() {

@@ -481,3 +481,7 @@ main:has(.rokbar) { padding-bottom: calc(160px + env(safe-area-inset-bottom)); }
 
 .rai li { line-height: 1.7; }
 .rai li.calv { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
+
+/* 体測の分析（2026-11-15） */
+.tbl tr.on td { background: var(--chip); }
+.tbl td a { color: var(--accent); }

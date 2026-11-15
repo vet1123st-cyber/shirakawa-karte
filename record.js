@@ -13,7 +13,7 @@
   var F = null, Q = null;
   var TABLE = 'input_record';
   // 糞洗い・PSPS は 2026-11-08 から「餌」（feed.js）へ移した。昔の #/record/feces・psps は餌へ回す
-  var SUBS = [['body', '体測', '#/record'], ['bcs', 'BCS・RFS', '#/record/bcs'],
+  var SUBS = [['body', '体測', '#/record'], ['growth', '体測分析', '#/record/growth'], ['bcs', 'BCS・RFS', '#/record/bcs'],
               ['feces', '糞洗い →餌', '#/feed/feces'], ['psps', 'PSPS →餌', '#/feed/psps']];
   var KIND = { body: '体測', bcs: 'BCS・RFS', feces: '糞洗い', psps: 'PSPS' };
   var SAMPLES = ['TMR（搾乳）', 'TMR（乾乳・育成）', '残飼', '草・サイレージ'];
@@ -21,7 +21,7 @@
 
   function bw(chest) { return Math.round((0.0234 * chest * chest - 2.281 * chest + 75.618) * 10) / 10; }
   function today() { return Q.localDate(); }
-  function subOf(hash) { var m = hash.match(/^#\/record\/(\w+)/); return m && KIND[m[1]] ? m[1] : 'body'; }
+  function subOf(hash) { var m = hash.match(/^#\/record\/(\w+)/); return m && (KIND[m[1]] || m[1] === 'growth') ? m[1] : 'body'; }
 
   function show(hash) {
     F = window.Farm;
@@ -42,6 +42,13 @@
   function render() {
     if (F.tabOf() !== 'record') return;
     var html = head();
+    if (S.sub === 'growth') {
+      F.app.innerHTML = html + '<div id="gan"><p class="muted pad">体測の記録を読んでいます…</p></div>';
+      Q.bar();
+      F.app.onclick = onGrowthClick;
+      F.app.oninput = null;
+      return growth();
+    }
     if (S.sub === 'body' || S.sub === 'bcs') html += cowForm();
     else html += groupForm();
     html += '<div id="rmine">' + mine() + '</div><div id="rhist"></div>';
@@ -59,6 +66,12 @@
       };
       if (!S.cow) q.focus();
     }
+    // 2026-11-15 本人「4桁で牛を選んだら、カーソルが体測の欄に入っていて、すぐ入力できるように」。
+    // タップの処理の中で focus するので、iPhone でもキーボードがそのまま出る
+    if (S.cow && S.sub === 'body') {
+      var ch = F.app.querySelector('[data-text="chest_cm"]');
+      if (ch) { ch.focus(); ch.select && ch.select(); }
+    }
     history();
   }
 
@@ -68,7 +81,7 @@
     var d = S.data, html = '';
     html += F.box('牛', led
       ? '<p><b class="big">' + F.no(led) + '</b> <span class="small muted">' + F.esc(led.name || '') + '・' +
-        ageText(led.birth_date) + '</span> <button type="button" class="link" data-clear="1">別の牛</button></p><div id="cprev"></div>'
+        ageText(led.birth_date) + '</span> <button type="button" class="link" data-clear="1">別の牛</button></p>'
       : '<input id="cq" type="search" inputmode="numeric" pattern="[0-9]*" placeholder="4桁" autocomplete="off" aria-label="4桁"><ul class="hits" id="chits"></ul>');
     if (!led) return html;
     if (S.sub === 'body') {
@@ -79,7 +92,9 @@
         opts('rumen_fill', 'ルーメンフィルスコア（RFS）', ['1', '2', '3', '4', '5'], d.rumen_fill) + textField('note', 'メモ', d.note));
     }
     html += '<div class="pickers"><label class="small muted" for="rdate">はかった日</label><input id="rdate" type="date" value="' + (d.date || today()) + '"></div>' +
-      '<button type="button" class="wide" data-save="1">残す（次の牛へ）</button>';
+      '<button type="button" class="wide" data-save="1">残す（次の牛へ）</button>' +
+      // これまでは入力の下に（牛を選んだらすぐ欄に打てるように。2026-11-15）
+      F.box('この牛のこれまで', '<div id="cprev"><p class="small muted">読んでいます…</p></div>');
     return html;
   }
   function ageText(b) {
@@ -123,9 +138,17 @@
 
   // ---------- 欄 ----------
   function field(k, label, v) {
+    var hint = k === 'chest_cm' ? ' enterkeyhint="next"' : (k === 'height_cm' ? ' enterkeyhint="done"' : '');
     return '<div class="field" data-field="' + k + '"><label>' + F.esc(label) + '</label><input type="number" inputmode="decimal" step="0.1" data-text="' + k +
-      '" value="' + F.esc(v == null ? '' : v) + '"></div>';
+      '"' + hint + ' value="' + F.esc(v == null ? '' : v) + '"></div>';
   }
+  // 胸囲で「次へ」→ 体高、体高で「完了」→ 残す（次の牛の4桁へ）
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || !F || F.tabOf() !== 'record' || S.sub !== 'body') return;
+    var k = e.target.getAttribute && e.target.getAttribute('data-text');
+    if (k === 'chest_cm') { e.preventDefault(); var h = F.app.querySelector('[data-text="height_cm"]'); if (h) h.focus(); }
+    else if (k === 'height_cm') { e.preventDefault(); save(); }
+  });
   function textField(k, label, v) {
     return '<div class="field" data-field="' + k + '"><label>' + F.esc(label) + '</label><input type="text" data-text="' + k + '" value="' + F.esc(v || '') + '"></div>';
   }
@@ -223,7 +246,7 @@
     var el = document.getElementById('rhist');
     if (!el) return;
     var q = {
-      body: S.cow ? 'v_weight?select=date,chest_cm,weight_est,ratio,source&cow_id=eq.' + S.cow + '&order=date.desc&limit=6' : null,
+      body: S.cow ? 'v_weight?select=date,age_days,chest_cm,weight_est,weight_actual,target_weight,ratio,source&cow_id=eq.' + S.cow + '&order=date.desc&limit=40' : null,
       bcs: S.cow ? 'cow_score?select=date,bcs,rumen_fill,source&cow_id=eq.' + S.cow + '&order=date.desc&limit=6' : null,
       feces: 'feces?select=date,target,item,value,note,source&order=date.asc',
       psps: 'psps?select=date,sample,item,value,note,source&order=date.asc'
@@ -239,7 +262,14 @@
 
   function cowHistory(rows) {
     if (!rows.length) return '<p class="small muted">これまでの記録はありません。</p>';
-    return '<ul class="list">' + rows.map(function (r) {
+    var mini = '';
+    if (S.sub === 'body') {
+      var pts = rows.filter(function (r) { return r.ratio != null && r.age_days != null; }).map(function (r) {
+        return { x: Math.round(r.age_days / 30.44 * 10) / 10, y: +r.ratio, tip: r.date + '・' + F.n(r.age_days / 30.44, 1) + 'か月' + NL + '充足率 ' + F.n(r.ratio) + '%・体重 ' + F.n(wOf(r), 0) + 'kg' };
+      });
+      if (pts.length > 1) mini = '<h4 class="gh">この牛の充足率（%・月齢）</h4>' + window.FarmTrend.xy([{ name: '充足率', color: 'var(--spark)', pts: pts }], { xlab: '月齢（か月）', unit: '%', label: '充足率' });
+    }
+    return mini + '<ul class="list">' + rows.slice(0, 6).map(function (r) {
       return '<li><span class="d">' + F.day(r.date) + '</span>　' + (S.sub === 'body'
         ? '胸囲 ' + F.n(r.chest_cm) + 'cm・推定 ' + F.n(r.weight_est, 1) + 'kg' + (r.ratio != null ? '・充足率 ' + F.n(r.ratio) + '%' : '')
         : (r.bcs != null ? 'BCS ' + F.n(r.bcs, 2) : '') + (r.rumen_fill != null ? '・RFS ' + r.rumen_fill : '')) + '</li>';
@@ -271,6 +301,186 @@
       }).join('') + '</tbody></table></div>';
     return F.box('これまで（%）', chart + t + F.src('糞洗い.xlsx のこれまでの分と、白川Farm で入れた分（PC が毎朝取り込んだもの）'));
   }
+
+  // ---------- 体測の分析（2026-11-15 本人「過去の充足率の推移、測定日ごとの体重の推移などの分析、その日の分析も」） ----------
+  // 1回の測定＝同じ日にはかった牛（体高BW では2か月ごとに40〜50頭）。体重は実測があれば実測、無ければ胸囲からの推定。
+  // 充足率・推奨体重は PC が体高BW.xlsx の日増体の表から出したもの（哺乳アプリの実測には無い）。
+  // 日増体＝同じ牛の前回の測定からの体重の増え÷日数（間が14日未満は使わない）。推奨の日増体＝推奨体重の増え÷日数
+  var NL = String.fromCharCode(10);
+  var G = { rows: null, day: null, quick: [] };
+  function wOf(r) { return r.weight_actual != null ? +r.weight_actual : (r.weight_est != null ? +r.weight_est : null); }
+  function moOf(days) { return days == null ? null : Math.round(days / 30.44 * 10) / 10; }
+  function mdShort(d) { return (+d.slice(5, 7)) + '/' + (+d.slice(8, 10)); }
+
+  function growth() {
+    var load = G.rows ? Promise.resolve(G.rows)
+      : F.all('v_weight?select=cow_id,date,age_days,chest_cm,height_cm,weight_est,weight_actual,target_weight,ratio,source&order=date.asc');
+    // まだ PC に取り込まれていない、スマホで入れた体測（速報。推奨・充足率は取り込み後）
+    var quick = F.get('input_record?select=id,cow_id,date,data,deleted,entered_name&kind=eq.' + encodeURIComponent('体測') + '&deleted=eq.false&order=date.desc&limit=300')
+      .catch(function () { return []; });
+    Promise.all([load, quick]).then(function (r) {
+      G.rows = r[0];
+      var have = {};
+      G.rows.forEach(function (x) { have[x.cow_id + '|' + x.date] = 1; });
+      var s = Q.store(), local = Object.keys(s).map(function (k) { return s[k]; })
+        .filter(function (x) { return x.table === TABLE && x.kind === '体測' && !x.deleted; });
+      var ids = local.map(function (x) { return x.id; });
+      G.quick = local.concat((r[1] || []).filter(function (x) { return ids.indexOf(x.id) < 0; }))
+        .filter(function (x) { return x.cow_id && x.data && x.data.chest_cm && !have[x.cow_id + '|' + x.date]; });
+      drawGrowth();
+    }).catch(function (err) {
+      var el = document.getElementById('gan');
+      if (el) el.innerHTML = '<p class="msg err">体測の記録を読めませんでした（' + F.esc(err.message) + '）。</p>';
+    });
+  }
+
+  // 牛ごとに並べて、前回からの日増体を付ける
+  function withGain(rows) {
+    var by = {};
+    rows.forEach(function (r) { (by[r.cow_id] = by[r.cow_id] || []).push(r); });
+    Object.keys(by).forEach(function (id) {
+      var a = by[id].sort(function (p, q) { return p.date < q.date ? -1 : 1; }), prev = null;
+      a.forEach(function (r) {
+        r._w = wOf(r);
+        r._dg = r._dgT = r._prev = null;
+        if (prev && r._w != null && prev._w != null) {
+          var dd = (Date.parse(r.date) - Date.parse(prev.date)) / 86400000;
+          if (dd >= 14) {
+            r._dg = (r._w - prev._w) / dd;
+            r._prev = prev;
+            if (r.target_weight != null && prev.target_weight != null) r._dgT = (r.target_weight - prev.target_weight) / dd;
+          }
+        }
+        if (r._w != null) prev = r;
+      });
+    });
+    return rows;
+  }
+
+  function median(a) { if (!a.length) return null; var b = a.slice().sort(function (p, q) { return p - q; }), m = (b.length - 1) / 2; return (b[Math.floor(m)] + b[Math.ceil(m)]) / 2; }
+
+  function drawGrowth() {
+    var el = document.getElementById('gan');
+    if (!el || F.tabOf() !== 'record' || S.sub !== 'growth') return;
+    var FT = window.FarmTrend, rows = withGain(G.rows.filter(function (r) { return wOf(r) != null; }));
+    var byDate = {}, dates = [];
+    rows.forEach(function (r) { if (!byDate[r.date]) { byDate[r.date] = []; dates.push(r.date); } byDate[r.date].push(r); });
+    dates.sort();
+    // 測定の日＝充足率のある日（体高BW・白川Farm）。哺乳アプリだけの日は 推移には入れない
+    var sess = dates.filter(function (d) { return byDate[d].some(function (r) { return r.ratio != null; }); });
+    var qd = {};
+    G.quick.forEach(function (x) { qd[x.date] = (qd[x.date] || 0) + 1; });
+    var pick = Object.keys(qd).concat(sess).sort().reverse();
+    pick = pick.filter(function (d, i) { return pick.indexOf(d) === i; });
+    if (!G.day || pick.indexOf(G.day) < 0) G.day = pick[0] || null;
+    var html = '';
+
+    // 1. 測定日ごとの充足率（箱ひげ）
+    var last = sess.slice(-10);           // 10回（体高BW は2か月ごと＝およそ1年半）。横に送らず1枚に収まる数
+    var tipOf = function (r) { var c = F.byId()[r.cow_id] || {}; return F.no(c).replace(/<[^>]*>/g, '') + '・' + F.n(moOf(r.age_days), 1) + 'か月・' + F.n(r._w, 0) + 'kg'; };
+    html += F.box('測定日ごとの充足率（%）', last.length ? '<div class="scroll">' + FT.box(last.map(function (d) {
+      var v = byDate[d].filter(function (r) { return r.ratio != null; }).map(function (r) { return { v: +r.ratio, tip: tipOf(r) }; });
+      return { label: d.slice(2, 4) + '/' + (+d.slice(5, 7)), note: F.day(d), sets: [{ name: '充足率', color: 'var(--spark)', stat: FT.boxStat(v) }] };
+    }), { unit: '%', ref: { v: 100, label: '充足率 100%（推奨体重どおり）' }, label: '測定日ごとの充足率' }) + '</div>' +
+      '<p class="small muted">箱は真ん中の半分、太い線は中央値、点は飛び離れた牛（押すと牛）。横線は 100%。直近 ' + last.length + ' 回。</p>'
+      : F.none('充足率のある記録がまだありません。'));
+
+    // 2. 測定日ごとの日増体（前回の測定からの体重の増え）
+    var dgDates = last.filter(function (d) { return byDate[d].some(function (r) { return r._dg != null; }); });
+    if (dgDates.length) {
+      var med = [];
+      html += F.box('測定日ごとの日増体（kg/日・前回の測定から）', '<div class="scroll">' + FT.box(dgDates.map(function (d) {
+        var a = byDate[d].filter(function (r) { return r._dg != null; });
+        var t = median(a.filter(function (r) { return r._dgT != null; }).map(function (r) { return r._dgT; }));
+        med.push(t);
+        return { label: d.slice(2, 4) + '/' + (+d.slice(5, 7)), note: F.day(d) + (t != null ? '・推奨の中央値 ' + F.n(t, 2) : ''),
+                 sets: [{ name: '日増体', color: 'var(--spark2)', stat: FT.boxStat(a.map(function (r) { return { v: Math.round(r._dg * 100) / 100, tip: tipOf(r) + '・前回 ' + F.day(r._prev.date) }; })) }] };
+      }), { unit: 'kg/日', label: '測定日ごとの日増体' }) + '</div>' +
+        '<p class="small muted">同じ牛の前回の測定との差÷日数（間が14日未満は使わない）。箱を押すと推奨の日増体（中央値）も出ます。</p>');
+    }
+
+    // 3. 測定日ごとの表
+    html += F.box('測定日ごとのまとめ', '<div class="scroll"><table class="tbl"><thead><tr><th>測定日</th><th>頭数</th><th>月齢</th><th>体重 中央</th><th>充足率 中央</th><th>90%未満</th><th>日増体 中央</th><th>推奨</th></tr></thead><tbody>' +
+      sess.slice().reverse().map(function (d) {
+        var a = byDate[d], rt = a.filter(function (r) { return r.ratio != null; }).map(function (r) { return +r.ratio; });
+        var g = a.filter(function (r) { return r._dg != null; }), ages = a.map(function (r) { return moOf(r.age_days); }).filter(function (x) { return x != null; });
+        var low = rt.filter(function (v) { return v < 90; }).length, mr = median(rt);
+        return '<tr data-gday="' + d + '"' + (d === G.day ? ' class="on"' : '') + '><td><a href="#" data-gday="' + d + '">' + F.day(d) + '</a></td><td>' + a.length + '</td><td>' +
+          (ages.length ? F.n(Math.min.apply(null, ages), 0) + '〜' + F.n(Math.max.apply(null, ages), 0) : '—') + '</td><td>' + F.n(median(a.map(function (r) { return r._w; })), 0) + '</td>' +
+          '<td' + (mr != null && mr < 95 ? ' class="hi"' : '') + '>' + F.n(mr, 1) + '</td><td' + (low ? ' class="hi"' : '') + '>' + low + '</td>' +
+          '<td>' + (g.length ? F.n(median(g.map(function (r) { return r._dg; })), 2) : '—') + '</td>' +
+          '<td>' + (g.length ? F.n(median(g.filter(function (r) { return r._dgT != null; }).map(function (r) { return r._dgT; })), 2) : '—') + '</td></tr>';
+      }).join('') + '</tbody></table></div><p class="small muted">月齢は その日にはかった牛の幅。日付を押すと、その日の分析に切り替わります。</p>');
+
+    // 4. その日の分析
+    if (G.day) html += dayHtml(G.day, byDate[G.day] || []);
+    html += F.src('体高BW（7.白川体高BW.xlsx・〜2026/10/10）と白川Farm の体測（PC が取り込んだもの）。推奨体重・充足率は体高BW.xlsx の日増体の表で PC が出す。哺乳アプリの実測は充足率が無いので推移には入れない');
+    el.innerHTML = html;
+    // 箱ひげは横に長いので、新しい日（右の端）から見せる
+    [].forEach.call(el.querySelectorAll('.scroll'), function (sc) { if (sc.querySelector('.boxplot')) sc.scrollLeft = sc.scrollWidth; });
+  }
+
+  function dayHtml(d, list) {
+    var FT = window.FarmTrend, q = G.quick.filter(function (x) { return x.date === d; });
+    var opts = Object.keys(G.rows.reduce(function (o, r) { if (r.ratio != null) o[r.date] = 1; return o; }, {}))
+      .concat(G.quick.map(function (x) { return x.date; })).sort().reverse();
+    opts = opts.filter(function (x, i) { return opts.indexOf(x) === i; });
+    var sel = '<div class="pickers"><label class="small muted" for="gday">測定日</label><select id="gday">' + opts.map(function (x) {
+      return '<option value="' + x + '"' + (x === d ? ' selected' : '') + '>' + F.day(x) + '</option>';
+    }).join('') + '</select></div>';
+    var rt = list.filter(function (r) { return r.ratio != null; }).map(function (r) { return +r.ratio; });
+    var g = list.filter(function (r) { return r._dg != null; });
+    var stat = '<div class="stats">' +
+      '<div class="stat"><div class="label">はかった牛</div><div class="val">' + (list.length + q.length) + '</div><div class="sub">頭' + (q.length ? '（うち速報 ' + q.length + '）' : '') + '</div></div>' +
+      '<div class="stat"><div class="label">充足率 中央値</div><div class="val">' + (rt.length ? F.n(median(rt), 1) : '—') + '</div><div class="sub">%（' + rt.length + '頭）</div></div>' +
+      '<div class="stat"><div class="label">90%未満</div><div class="val">' + rt.filter(function (v) { return v < 90; }).length + '</div><div class="sub">頭</div></div>' +
+      '<div class="stat"><div class="label">日増体 中央値</div><div class="val">' + (g.length ? F.n(median(g.map(function (r) { return r._dg; })), 2) : '—') + '</div><div class="sub">kg/日（' + g.length + '頭）</div></div></div>';
+    // 日齢と体重（その日）。推奨体重も並べる
+    var pw = [], pt = [];
+    list.forEach(function (r) {
+      var m = moOf(r.age_days); if (m == null) return;
+      var tip = tipOf2(r);
+      pw.push({ x: m, y: r._w, tip: tip });
+      if (r.target_weight != null) pt.push({ x: m, y: +r.target_weight, tip: tip });
+    });
+    q.forEach(function (x) {
+      var c = F.byId()[x.cow_id] || {}, dd = c.birth_date ? (Date.parse(x.date) - Date.parse(c.birth_date)) / 86400000 : null;
+      if (dd == null) return;
+      pw.push({ x: moOf(dd), y: bw(+x.data.chest_cm), tip: F.no(c).replace(/<[^>]*>/g, '') + NL + '速報 胸囲 ' + x.data.chest_cm + 'cm・推定 ' + bw(+x.data.chest_cm) + 'kg' });
+    });
+    var chart = pw.length ? FT.xy([{ name: '体重', color: 'var(--spark)', pts: pw, line: false }, { name: '推奨体重', color: 'var(--spark2)', pts: pt, dash: true }],
+      { xlab: '月齢（か月）', unit: 'kg', label: 'その日の体重と推奨' }) : '';
+    // 牛ごとの表（充足率の低い順）
+    var rowsH = list.slice().sort(function (a, b) { return (a.ratio == null ? 999 : a.ratio) - (b.ratio == null ? 999 : b.ratio); }).map(function (r) {
+      var c = F.byId()[r.cow_id] || {}, pr = r._prev;
+      return '<tr><td><a href="#/cow/' + r.cow_id + '">' + F.no(r.cow_id, c.mgmt_no) + '</a></td><td>' + F.n(moOf(r.age_days), 1) + '</td><td>' + F.n(r.chest_cm) + '</td>' +
+        '<td>' + F.n(r._w, 0) + '</td><td>' + F.n(r.target_weight, 0) + '</td><td' + (r.ratio != null && r.ratio < 90 ? ' class="hi"' : '') + '>' + F.n(r.ratio, 1) + '</td>' +
+        '<td>' + (pr && pr.ratio != null && r.ratio != null ? (r.ratio - pr.ratio >= 0 ? '+' : '') + F.n(r.ratio - pr.ratio, 1) : '—') + '</td>' +
+        '<td' + (r._dg != null && r._dgT != null && r._dg < r._dgT * 0.9 ? ' class="hi"' : '') + '>' + (r._dg != null ? F.n(r._dg, 2) : '—') + '</td>' +
+        '<td>' + (r._dgT != null ? F.n(r._dgT, 2) : '—') + '</td></tr>';
+    }).join('') + q.map(function (x) {
+      var c = F.byId()[x.cow_id] || {};
+      return '<tr><td>' + F.no(x.cow_id, c.mgmt_no) + ' <span class="badge quick">速報</span></td><td>' + F.n(moOf(F.days(c.birth_date, x.date)), 1) + '</td><td>' + F.n(x.data.chest_cm) + '</td>' +
+        '<td>' + F.n(bw(+x.data.chest_cm), 0) + '</td><td colspan="5" class="l small muted">推奨・充足率は PC の取り込み後</td></tr>';
+    }).join('');
+    return F.box('その日の分析（' + F.day(d) + '）', sel + stat + chart +
+      '<div class="scroll"><table class="tbl"><thead><tr><th>牛</th><th>月齢</th><th>胸囲</th><th>体重</th><th>推奨</th><th>充足率</th><th>前回比</th><th>日増体</th><th>推奨</th></tr></thead><tbody>' +
+      rowsH + '</tbody></table></div>' +
+      '<p class="small muted">充足率の低い順。赤は 充足率 90% 未満、日増体が推奨の 9 割未満。前回比は前回の測定からの充足率の変化（ポイント）。体重は kg、日増体は kg/日。</p>');
+  }
+  function tipOf2(r) {
+    var c = F.byId()[r.cow_id] || {};
+    return F.no(c).replace(/<[^>]*>/g, '') + '・' + F.n(moOf(r.age_days), 1) + 'か月' + NL + '体重 ' + F.n(r._w, 0) + 'kg' +
+      (r.target_weight != null ? '・推奨 ' + F.n(r.target_weight, 0) + 'kg' : '') + (r.ratio != null ? NL + '充足率 ' + F.n(r.ratio, 1) + '%' : '') +
+      (r._dg != null ? NL + '日増体 ' + F.n(r._dg, 2) + 'kg/日（前回 ' + F.day(r._prev.date) + '）' : '');
+  }
+  function onGrowthClick(e) {
+    var a = e.target.closest('[data-gday]');
+    if (a) { e.preventDefault(); G.day = a.getAttribute('data-gday'); drawGrowth(); var b = document.getElementById('gday'); if (b) b.scrollIntoView({ block: 'start' }); }
+  }
+  document.addEventListener('change', function (e) {
+    if (e.target && e.target.id === 'gday') { G.day = e.target.value; drawGrowth(); }
+  });
 
   window.RecordPage = {
     show: show,

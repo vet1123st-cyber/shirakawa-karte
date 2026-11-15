@@ -353,7 +353,7 @@
     var cid = Date.now(), me = F.me(), s = store();
     rows.forEach(function (x, i) {
       var c = x.c, rec = recFor(c.cow_id, date, 'リスト', true), snap = Object.assign({}, c);
-      ['pos', 'removed', 'added', 'isNew', 'list_date', 'farm_id'].forEach(function (k) { delete snap[k]; });
+      ['pos', 'removed', 'added', 'isNew', 'excl', 'list_date', 'farm_id'].forEach(function (k) { delete snap[k]; });
       rec.data = { cid: cid, cby: me, since: since, pos: i * 1000, removed: !!x.removed, added: !!x.added,
                    tab: isPreg(c) ? '妊鑑' : '検診', snap: snap };
       if (x.isNew) rec.data.isNew = true;
@@ -556,7 +556,7 @@
     return by;
   }
   // PC が作ったリスト ＋ アプリでの直し。pos は並び（PC の並びを 1000 おきに置き、動かした牛だけ間に入れる）
-  function listNow() {
+  function listRaw() {
     var ed = edits(), out = [], seen = {};
     if (S.fix) {
       // 確定したリスト: 牛の数字は確定のときの写し（snap）。PC の案（S.list）は見ない
@@ -583,8 +583,55 @@
     });
     return out;
   }
+  function listNow() {
+    var ex = exclMap();
+    return listRaw().map(function (c) { if (ex[c.cow_id]) c.excl = true; return c; });
+  }
+  // ---------- 繁殖除外（2026-11-14 本人「4桁で探せば出るが、繁殖では出てこないように」） ----------
+  // 繁殖除外＝その牛のいちばん新しい日の所見（妊鑑・検診）の処置に「除外」があること（PC の make_exam_list と同じ見方。
+  // PC は次の分娩まで検診リストに載せない）。新しい表・種類は作らない。「繁殖除外にする」は、その日の繁殖検診に処置「除外」を入れるのと同じ。
+  // 除外の牛は検診リスト・残り頭数・レポートの未入力に出さない。4桁で探せば開ける。一覧の下に「繁殖除外」の牛を並べ、やめられる
+  function exclMap() {
+    var s = store(), last = {}, ids = {}, out = {};
+    var mine = Object.keys(s).map(function (k) { return s[k]; });
+    mine.forEach(function (r) { ids[r.id] = 1; });
+    mine.concat(S.server.filter(function (r) { return !ids[r.id]; })).forEach(function (r) {
+      if (r.deleted || (r.kind !== '妊娠鑑定' && r.kind !== '繁殖検診')) return;
+      var L = last[r.cow_id];
+      if (!L || r.date > L.date) L = last[r.cow_id] = { date: r.date, rows: [] };
+      if (r.date === L.date) L.rows.push(r);
+    });
+    Object.keys(last).forEach(function (id) {
+      var hit = last[id].rows.filter(function (r) { return inList((r.data || {}).treatment, '除外'); })[0];
+      if (hit) out[id] = hit;
+    });
+    return out;
+  }
+  function setExcl(cow, on) {
+    var ex = exclMap()[cow], me = F.me();
+    if (on) {
+      if (ex) return true;
+      var rec = recFor(cow, workDate(), '繁殖検診');
+      if (rec.ro) { alert('この日の繁殖検診は ' + nameOf(rec.by) + ' さんが入力済みです。除外にできるのは、入れた本人と管理者です。'); return false; }
+      rec.data = rec.data || {};
+      rec.data.treatment = [].concat(rec.data.treatment || []).filter(function (x) { return x !== 'なし' && x !== '除外'; }).concat(['除外']);
+      keep(rec);
+      return true;
+    }
+    if (!ex) return true;
+    var foreign = ex.by || (ex.entered_name && ex.entered_name !== me ? ex.entered_name : '');
+    if (foreign && !isOwner()) { alert('この除外は ' + nameOf(foreign) + ' さんが入れました。やめられるのは、入れた本人と管理者です。'); return false; }
+    var r = store()[ex.id] || { id: ex.id, cow_id: ex.cow_id, date: ex.date, kind: ex.kind, data: JSON.parse(JSON.stringify(ex.data || {})) };
+    if (foreign) r.by = foreign;
+    r.data.treatment = [].concat(r.data.treatment || []).filter(function (x) { return x !== '除外'; });
+    clean(r.data);
+    // 除外だけの入力だったら、入力ごと取り消す（箱には「取り消し」として残る）
+    if (!Object.keys(r.data).filter(function (k) { return k !== 'fixed_by'; }).length) { r.data = ex.data || {}; r.deleted = true; }
+    keep(r);
+    return true;
+  }
   function byTab(tab, removed) {
-    return listNow().filter(function (c) { return !!c.removed === !!removed && (tab === '妊鑑' ? isPreg(c) : !isPreg(c)); })
+    return listNow().filter(function (c) { return !c.excl && !!c.removed === !!removed && (tab === '妊鑑' ? isPreg(c) : !isPreg(c)); })
       .sort(function (a, b) { return a.pos - b.pos; });
   }
   function setEdit(cow, patch) {
@@ -613,7 +660,7 @@
       html += F.box('検診リスト', F.none('リストがまだ箱にありません。訪問の前に PC で「J_検診リストを作る」を押すと出ます。' +
         '上の「4桁で探す」から牛を足して、ここでリストを作ることもできます。'));
     } else {
-      var tabs = ['妊鑑', '検診'], act = now.filter(function (c) { return !c.removed; }), n = act.length;
+      var tabs = ['妊鑑', '検診'], act = now.filter(function (c) { return !c.removed && !c.excl; }), n = act.length;
       var left = act.filter(function (c) { return !inputsOf(c.cow_id).length; }).length, dr = draft();
       html += '<div class="head"><div class="name"><b>検診リスト</b></div><div class="id">' +
         (S.fix ? '<span class="ok">✓ 確定</span>（' + F.md(S.fix.date) + (S.fix.by ? ' ' + F.esc(nameOf(S.fix.by)) : '') + '）・' + n + ' 頭'
@@ -672,6 +719,16 @@
         }).join('') + '</ul>');
       }
     }
+    var exm = exclMap(), exIds = Object.keys(exm);
+    if (exIds.length) {
+      html += F.box('繁殖除外（' + exIds.length + '頭）', '<p class="small muted">検診リストには出しません（次の分娩まで）。4桁で探せば開けます。</p><ul class="list">' +
+        exIds.map(function (id) {
+          var r = exm[id], led = F.byId()[id] || {}, who = r.by || r.entered_name || '';
+          return '<li><a href="#/repro/cow/' + id + '"><b>' + F.no(id, led.mgmt_no) + '</b></a> <span class="small muted">' + F.md(r.date) + ' から' +
+            (who && who !== F.me() ? '（' + F.esc(nameOf(who)) + '）' : '') + '</span> ' +
+            '<button type="button" class="link" data-exoff="' + id + '">除外をやめる</button></li>';
+        }).join('') + '</ul>');
+    }
     html += historyHtml(workDate());
     F.app.innerHTML = html;
     bar();
@@ -692,6 +749,12 @@
       if (b.hasAttribute('data-undo-id')) { if (undoById(b.getAttribute('data-undo-id'))) renderList(); return; }
       if (b.hasAttribute('data-redo-id')) { if (undoById(b.getAttribute('data-redo-id'), true)) renderList(); return; }
       if (b.hasAttribute('data-hist')) { S.hist = b.getAttribute('data-hist'); return renderList(); }
+      if (b.hasAttribute('data-exoff')) {
+        var xid = b.getAttribute('data-exoff');
+        if (!confirm(String((F.byId()[xid] || {}).mgmt_no || xid.slice(5, 9)) + ' の繁殖除外をやめますか？')) return;
+        if (setExcl(xid, false)) renderList();
+        return;
+      }
       if (b.hasAttribute('data-todo')) { S.todo = !S.todo; return renderList(); }
       if (b.hasAttribute('data-fix')) { fixNow(); S.edit = false; return renderList(); }
       if (b.hasAttribute('data-swap')) {
@@ -715,12 +778,12 @@
     };
     var q = document.getElementById('rq'), hits = document.getElementById('rhits');
     q.oninput = function () {
-      var on = {};
+      var on = {}, exq = exclMap();
       listNow().forEach(function (c) { if (!c.removed) on[c.cow_id] = 1; });
       var lc = {};
       listNow().forEach(function (c) { lc[c.cow_id] = c; });
       hits.innerHTML = F.find(q.value).slice(0, 8).map(function (c) {
-        var l = lc[c.cow_id], tag = l ? (l.removed ? 'リストから外した牛' : 'リスト：' + (l.reason || '')) : 'リストに無い牛';
+        var l = lc[c.cow_id], tag = (exq[c.cow_id] ? '繁殖除外中・' : '') + (l ? (l.removed ? 'リストから外した牛' : 'リスト：' + (l.reason || '')) : 'リストに無い牛');
         return '<li class="editrow"><a class="editbody" href="#/repro/cow/' + c.cow_id + '"><span class="no">' + F.no(c) + '</span><span>' +
           F.esc(c.name || '') + '<br><span class="small muted">' + F.esc(tag) + '・' + F.day(c.birth_date) + '生</span></span></a>' +
           (S.listDate && !on[c.cow_id] ? '<div class="editbtns"><button type="button" data-add="' + c.cow_id + '">＋ ' +
@@ -843,7 +906,7 @@
     push(nos(has('除外')), '繁殖から除外（次の分娩まで検診リストに載せません）');
     // 5. 確認事項
     var check = [];
-    var missRows = listNow().filter(function (c) { return !c.removed && !by[c.cow_id]; }).sort(function (a, b) { return a.pos - b.pos; });
+    var missRows = listNow().filter(function (c) { return !c.removed && !c.excl && !by[c.cow_id]; }).sort(function (a, b) { return a.pos - b.pos; });
     var miss = missRows.map(function (c) { return String(c.mgmt_no || ''); });
     if (miss.length) check.push('今回記載のない牛（' + miss.join('、') + '）：未検診');
     var nomm = nos(function (o) {
@@ -1097,7 +1160,11 @@
       state + (current.by ? '' : othersHtml(S.open, workDate(), kind)) +
       '<section class="box" id="rform">' + formHtml() + '</section>' +
       '<div class="seg"><button type="button" data-step="-1">‹ 前の牛</button><button type="button" data-step="1">次の牛 ›</button></div>' +
+      (exclMap()[S.open]
+        ? '<div class="rnote warn"><b>繁殖除外中。</b>検診リストには出しません（4桁で探せば開けます）。<button type="button" class="wide" data-excl="0">除外をやめる</button></div>'
+        : '<button type="button" class="more" data-excl="1">繁殖除外にする（検診リストに出さない）</button>') +
       '<div id="rbar" class="rbar"></div>' +
+      '<div id="rai"></div>' +
       '<div id="rprev"></div>' +
       // 2026-11-14 本人「記録を入力して OK を押すと、牛一覧に戻るように」。下のタブのすぐ上に貼りつけ、長い画面でも親指で届く
       '<div class="rokbar"><div class="sbrow"><div class="sbinfo" id="roksum"></div>' +
@@ -1108,8 +1175,42 @@
     F.app.oninput = onInput;
     document.getElementById('rdate').onchange = function () { setWorkDate(this.value); ensureDate(workDate()).then(renderCow); };
     okSum();
+    aiHistory();
     prevExams();
     prevScore();
+  }
+  // 授精・ET の履歴（2026-11-14 本人「繁殖、授精の履歴も見れるようにしたい」）。
+  // PC の repro_book.py が farm_summary section='授精履歴' key=10桁 に置く1頭1行（TAF の繁殖 ＋ TAF にまだ無い TimeTree の授精メモ）。
+  // 今の産次（最後の分娩より後）を上に出し、何回目の授精かを数える。前の産次は折りたたむ
+  function aiHistory() {
+    var cow = S.open;
+    F.get('farm_summary?select=date,n,note&section=eq.' + encodeURIComponent('授精履歴') + '&key=eq.' + cow).then(function (r) {
+      var el = document.getElementById('rai');
+      if (!el || S.open !== cow) return;
+      var ev = [];
+      try { ev = (JSON.parse((r[0] || {}).note || '{}').e || []).slice(); } catch (e) { ev = []; }
+      var src = F.src('TAF の繁殖（報告は授精から中央19日遅れる）と、TAF にまだ無い TimeTree の授精メモ。PC が毎朝まとめる');
+      if (!ev.length) { el.innerHTML = F.box('授精・ET の履歴', F.none('TAF・TimeTree に授精の記録がありません。') + src); return; }
+      // 古い順に数える: 分娩のたびに回数を1に戻す
+      var n = 0;
+      ev.slice().reverse().forEach(function (x) { if (x[1] === '分娩') n = 0; else if (x[1] === 'AI' || x[1] === 'ET') x.n = ++n; });
+      var cut = -1;
+      ev.forEach(function (x, i) { if (cut < 0 && x[1] === '分娩') cut = i; });
+      var now = cut < 0 ? ev : ev.slice(0, cut), old = cut < 0 ? [] : ev.slice(cut);
+      var line = function (x) {
+        if (x[1] === '分娩') return '<li class="calv"><span class="d">' + F.day(x[0]) + '</span>　<b>分娩</b>' + (x[2] ? '（' + F.esc(x[2]) + '）' : '') + '</li>';
+        if (x[1] === '妊鑑') return '<li><span class="d">' + F.day(x[0]) + '</span>　妊鑑 <b class="' + (x[2] === '＋' ? 'ok' : 'hi') + '">' + F.esc(x[2] || '—') + '</b></li>';
+        return '<li><span class="d">' + F.day(x[0]) + '</span>　<span class="chip">' + x[1] + ' ' + x.n + '回目</span> ' + F.esc(x[2] || '') +
+          (x[3] === 'M' ? ' <span class="small muted">（TimeTree）</span>' : '') + '</li>';
+      };
+      var ais = now.filter(function (x) { return x[1] === 'AI' || x[1] === 'ET'; });
+      var head = ais.length ? '今の産次：授精・ET <b>' + ais.length + ' 回</b>・最終 ' + F.md(ais[0][0]) + '（' + F.days(ais[0][0], workDate()) + ' 日前）'
+                            : '今の産次：授精・ET の記録はまだありません';
+      el.innerHTML = F.box('授精・ET の履歴', '<p class="small">' + head + '</p>' +
+        (now.length ? '<ul class="list rai">' + now.map(line).join('') + '</ul>' : '') +
+        (old.length ? '<details class="rgone"><summary>前の産次まで（' + old.filter(function (x) { return x[1] === 'AI' || x[1] === 'ET'; }).length +
+          ' 回）</summary><ul class="list rai">' + old.map(line).join('') + '</ul></details>' : '') + src);
+    }).catch(function () { /* 履歴が読めなくても入力はできる */ });
   }
   // 下の OK バーに、いま入っている中身を出す（押し間違いにその場で気づける）
   function okSum() {
@@ -1166,15 +1267,19 @@
   // 前回までの所見（PC が取り込んだ v_repro_exam。きのうまでの分）と発情・処置
   function prevExams() {
     F.get('v_repro_exam?select=date,preg_check,ov_left,cl_left,fol_left,ov_right,cl_right,fol_right,uterus,treatment,plan,plan_days,vet&cow_id=eq.' +
-      S.open + '&order=date.desc&limit=3').then(function (r) {
+      S.open + '&order=date.desc&limit=12').then(function (r) {
       var el = document.getElementById('rprev');
       if (!el || !r.length) return;
-      el.innerHTML = F.box('前回まで', '<ul class="list">' + r.map(function (x) {
+      var li = function (x) {
         if (typeof x.treatment === 'string' && x.treatment) x.treatment = x.treatment.split(',');
         // 診た人は、スマホから入れた分はメールアドレスなので @ より前だけ出す
         return '<li><span class="d">' + F.day(x.date) + '</span>　' + F.esc(summary(x)) +
           (x.vet ? '<span class="small muted">（' + F.esc(String(x.vet).split('@')[0]) + '）</span>' : '') + '</li>';
-      }).join('') + '</ul>' + F.src('検診の所見（PC が毎朝取り込んだもの）'));
+      };
+      // 新しい3回を出し、その前は折りたたむ（2026-11-14 繁殖の履歴も見たい）
+      el.innerHTML = F.box('検診の所見の履歴', '<ul class="list">' + r.slice(0, 3).map(li).join('') + '</ul>' +
+        (r.length > 3 ? '<details class="rgone"><summary>その前（' + (r.length - 3) + ' 回）</summary><ul class="list">' + r.slice(3).map(li).join('') + '</ul></details>' : '') +
+        F.src('検診の所見（PC が毎朝取り込んだもの）'));
     }).catch(function () { /* 前回が読めなくても入力はできる */ });
   }
 
@@ -1363,6 +1468,14 @@
       S.back = S.open; S.mode = ''; S.more = false;
       location.hash = '#/repro';
       return;
+    }
+    if (t.hasAttribute('data-excl')) {
+      var xon = t.getAttribute('data-excl') === '1', xno = String((cowRow() || F.byId()[S.open] || {}).mgmt_no || S.open.slice(5, 9));
+      if (!confirm(xon ? xno + ' を繁殖除外にしますか？\n検診リストに出なくなります（4桁で探せば開けます。次の分娩まで）' : xno + ' の繁殖除外をやめますか？')) return;
+      if (!setExcl(S.open, xon)) return;
+      clearTimeout(timer); send();
+      if (xon) { S.mode = ''; S.more = false; location.hash = '#/repro'; return; }
+      return renderCow();
     }
     if (t.hasAttribute('data-undo')) {
       if (!confirm('この入力を取り消しますか？（箱には「取り消し」として残ります）')) return;

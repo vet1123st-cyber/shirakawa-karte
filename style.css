@@ -478,3 +478,6 @@ main:has(.rokbar) { padding-bottom: calc(160px + env(safe-area-inset-bottom)); }
 .rokbar .sbbtn { background: var(--accent); color: #fff; border: 0; font-weight: 800; font-size: 18px; min-height: 52px; min-width: 128px; border-radius: 14px; }
 .rres li a { align-items: flex-start; }
 .head > a.link { display: block; margin-top: 8px; }
+
+.rai li { line-height: 1.7; }
+.rai li.calv { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }

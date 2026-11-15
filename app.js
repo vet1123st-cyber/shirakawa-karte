@@ -686,7 +686,7 @@
   // PC の farm_summary.py が毎朝計算して箱の farm_summary 表に置く（ロボットの群の平均・授精率・妊娠率・受胎率）
   function showTop() {
     // ゲノムの行（約270KB）・飼料分析の行（約30KB）・反芻の箱ひげ（約30KB）はそれぞれのページだけで読む
-    loadPage('top', 'top', 'farm_summary?select=section,key,date,value,n,note&section=not.in.(' + encodeURIComponent('ゲノム') + ',' + encodeURIComponent('飼料') + ',' + encodeURIComponent('反芻') + ')' +
+    loadPage('top', 'top', 'farm_summary?select=section,key,date,value,n,note&section=not.in.(' + encodeURIComponent('ゲノム') + ',' + encodeURIComponent('飼料') + ',' + encodeURIComponent('反芻') + ',' + encodeURIComponent('授精履歴') + ')' +
       '&order=date.asc', drawTop);
   }
 

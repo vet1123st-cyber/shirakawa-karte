@@ -554,3 +554,26 @@ main:has(.rokbar) { padding-bottom: calc(160px + env(safe-area-inset-bottom)); }
 /* 反芻の箱ひげ 初産・経産を2枚（2026-11-22） */
 .rumenhd { font-size: 13px; margin: 10px 0 2px; font-weight: 600; }
 .rumenhd i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; opacity: .7; }
+
+/* 検診リスト：入力した牛はひと目で分かる色に（2026-11-22 本人「入力したら色が変わったり、リストの下に移動」）
+   済み＝緑の地と左の太い線と ✓、途中＝だいだいの地。済みの牛は下の「✓ 入力済み」にたたむ（repro.js） */
+.hits a.done { background: var(--ok-bg); border-color: var(--accent); border-left-width: 6px; }
+.hits a.done .no::before { content: '✓ '; color: var(--accent); }
+.hits a.part { background: var(--warn-bg); border-left-width: 6px; }
+.rdone > summary { padding: 12px 14px; border-left: 6px solid var(--accent); }
+
+/* 検診リストの2つの入り方（2026-11-22 本人）：1頭ずつ／リストを作る→候補から選ぶ→確定 */
+.rway { margin: 4px 0 6px; }
+.pickhd { font-size: 15px; margin: 14px 0 6px; }
+.picks { list-style: none; padding: 0; margin: 0; }
+.pickrow { display: flex; align-items: flex-start; gap: 10px; width: 100%; text-align: left; font: inherit; color: inherit;
+  background: var(--card, #fff); border: 1px solid var(--line, #ddd); border-radius: 12px; padding: 12px; margin: 0 0 8px; min-height: 56px; }
+.pickrow .pk { flex: none; width: 28px; height: 28px; border-radius: 8px; border: 2px solid var(--line, #bbb);
+  display: inline-flex; align-items: center; justify-content: center; font-weight: 700; color: var(--on-accent, #fff); }
+.pickrow.on { background: var(--ok-bg); border-color: var(--accent); }
+.pickrow.on .pk { background: var(--accent); border-color: var(--accent); }
+.pickrow .no { flex: none; font-weight: 700; font-size: 18px; white-space: nowrap; }
+.pickrow .pb { flex: 1; min-width: 0; }
+.pickfoot { position: sticky; bottom: calc(64px + env(safe-area-inset-bottom)); padding: 8px 0; background: var(--bg); z-index: 5; }
+.pickfoot button[disabled] { opacity: .5; }
+.rgone > summary { background: var(--card); color: var(--muted); border-left-color: var(--line); }

@@ -684,14 +684,78 @@
     if (q.oninput) q.oninput();
   });
 
+  // ---------- 2つの入り方（2026-11-22 本人） ----------
+  // 1 1頭ずつ: 4桁・a番号で探して、その牛の結果を入れる（リストは要らない）
+  // 2 リスト: 「リストを作る」→ 候補（PC が前日に作る案＝レリー22・23・分娩・処置・未経産）→ 選ぶ → 「リスト確定」→ そのリストで検診して入れる
+  // 選ぶ画面は S.pick。選んだ牛は S.sel、4桁で足した牛は S.pickAdd。確定は今までの fixList（外した牛は removed で残る＝あとで戻せる）
+  function candidates() {
+    var ex = exclMap(), seen = {}, out = [];
+    var push = function (c) { if (!c || seen[c.cow_id] || ex[c.cow_id]) return; seen[c.cow_id] = 1; out.push(c); };
+    S.list.forEach(push);
+    if (S.fix) listNow().sort(function (a, b) { return a.pos - b.pos; }).forEach(push);
+    (S.pickAdd || []).forEach(push);
+    return out;
+  }
+  function startPick() {
+    var cur = {};
+    if (S.fix) listNow().forEach(function (c) { if (!c.removed) cur[c.cow_id] = 1; });
+    S.pick = true; S.sel = {}; S.pickAdd = []; S.edit = false;
+    candidates().forEach(function (c) { S.sel[c.cow_id] = S.fix ? !!cur[c.cow_id] : true; });
+  }
+  function pickFix() {
+    var rows = candidates().map(function (c) {
+      return { c: c, removed: !S.sel[c.cow_id], added: !!c.added || (S.pickAdd || []).indexOf(c) >= 0 };
+    });
+    var n = rows.filter(function (x) { return !x.removed; }).length;
+    if (!n) { alert('牛が1頭も選ばれていません。'); return; }
+    var date = S.pcDate || S.listDate || localDate();
+    fixList(rows, S.fix && S.fix.date === date ? S.fix.since : date, date);
+    S.pick = false; S.sel = {}; S.pickAdd = [];
+  }
+  function pickHtml() {
+    var cs = candidates(), nOn = cs.filter(function (c) { return S.sel[c.cow_id]; }).length;
+    var h = '<div class="rlisthead"><div class="rlt"><b>候補から選ぶ</b> <span class="small muted">' +
+      (S.pcDate ? F.md(S.pcDate) + ' に PC が作った候補・' : '') + cs.length + ' 頭</span></div>' +
+      '<div class="rbtns"><button type="button" class="chipbtn" data-pickall="1">全部選ぶ</button>' +
+      '<button type="button" class="chipbtn" data-pickall="0">全部外す</button>' +
+      '<button type="button" class="chipbtn" data-pickcancel="1">やめる</button></div></div>' +
+      '<p class="small muted">押すと ✓ が付きます（もう一度押すと外れます）。候補に無い牛は、上の「1頭ずつ」で探して「＋ リストに足す」。</p>';
+    if (!cs.length) h += F.none('候補がまだありません（検診の前日に PC が作ります）。上で4桁を打って牛を足せます。');
+    ['妊鑑', '検診'].forEach(function (t) {
+      var g = cs.filter(function (c) { return t === '妊鑑' ? isPreg(c) : !isPreg(c); });
+      if (!g.length) return;
+      var on = g.filter(function (c) { return S.sel[c.cow_id]; }).length;
+      h += '<h3 class="pickhd">' + (t === '妊鑑' ? '妊娠鑑定' : '繁殖検診') + ' <span class="small muted">' + on + ' / ' + g.length + ' 頭</span></h3><ul class="hits picks">' +
+        g.map(function (c) {
+          var sel = !!S.sel[c.cow_id];
+          var facts = [c.parity != null ? c.parity + '産' : '', c.dim != null ? 'DIM ' + c.dim : '',
+                       c.days_after_ai != null ? 'AI後' + c.days_after_ai + '日' : '', c.last_semen || ''].filter(Boolean).join('・');
+          return '<li><button type="button" class="pickrow' + (sel ? ' on' : '') + '" data-pick="' + c.cow_id + '" aria-pressed="' + sel + '">' +
+            '<span class="pk">' + (sel ? '✓' : '') + '</span><span class="no">' + F.no(c.cow_id, c.mgmt_no) + '</span><span class="pb">' +
+            F.esc(c.reason || '') + (c.added ? ' <span class="chip out">足した</span>' : '') +
+            (facts ? '<br><span class="small muted">' + F.esc(facts) + '</span>' : '') +
+            (c.note ? '<br><span class="small">' + F.esc(c.note) + '</span>' : '') + '</span></button></li>';
+        }).join('') + '</ul>';
+    });
+    h += '<div class="pickfoot"><button type="button" class="wide primary" data-pickfix="1"' + (nOn ? '' : ' disabled') + '>リスト確定（' + nOn + ' 頭）</button></div>';
+    return h;
+  }
+
   function renderList() {
     if (F.tabOf() !== 'repro') return;
     var html = head('list') + datePicker() +
       // 4桁で探す（2026-11-14 本人）。リストの牛もリストに無い牛も、ここから開ける
-      '<div class="rsearch"><div class="aq">' + aKey('rq') + '<input id="rq" type="search" inputmode="numeric" pattern="[0-9]*" placeholder="4桁 か a番号（ネック）" autocomplete="off" aria-label="4桁かネックの番号で探す"></div>' +
+      '<div class="rsearch"><div class="rway"><b>1頭ずつ入力</b> <span class="small muted">4桁 か a番号で探して、結果を入れる</span></div>' +
+      '<div class="aq">' + aKey('rq') + '<input id="rq" type="search" inputmode="numeric" pattern="[0-9]*" placeholder="4桁 か a番号（ネック）" autocomplete="off" aria-label="4桁かネックの番号で探す"></div>' +
       '<ul class="hits" id="rhits"></ul></div>';
     var now = listNow();
-    if (!now.length) {
+    if (S.pick) {
+      html += pickHtml();
+    } else if (!S.fix) {
+      // まだ確定したリストが無い: 「リストを作る」から（PC の案をそのまま並べない）
+      html += F.box('検診リスト', '<p class="small muted">候補（' + (S.list.length ? F.md(S.pcDate) + ' に PC が作った ' + S.list.length + ' 頭' : 'まだありません') +
+        '）から、今日診る牛を選んでリストにします。</p><button type="button" class="wide primary" data-pickstart="1">リストを作る</button>');
+    } else if (!now.length) {
       html += F.box('検診リスト', F.none('リストがまだ箱にありません。訪問の前に PC で「J_検診リストを作る」を押すと出ます。' +
         '上の「4桁で探す」から牛を足して、ここでリストを作ることもできます。'));
     } else {
@@ -702,7 +766,8 @@
         (S.fix ? '<span class="ok">✓ 確定</span> ' + F.md(S.fix.date) + (S.fix.by ? ' ' + F.esc(nameOf(S.fix.by)) : '') + '・' + n + ' 頭'
                : F.md(S.listDate) + ' の案・' + n + ' 頭') + '</span></div>' +
         '<div class="rbtns"><button type="button" class="chipbtn' + (S.edit ? ' on' : '') + '" data-edit="1">' + (S.edit ? '✓ 直し終わり' : '✎ 直す') + '</button>' +
-        '<a class="chipbtn" href="#/repro/report">📄 一覧とレポート</a></div></div>';
+        '<a class="chipbtn" href="#/repro/report">📄 一覧とレポート</a>' +
+        '<button type="button" class="chipbtn" data-pickstart="1">リストを作り直す</button></div></div>';
       // 確定の帯。まだなら大きなボタン、確定したあとに PC の新しい案があれば入れ替えを選べる
       if (!S.fix) {
         html += '<div class="rnote warn"><b>まだ確定していません。</b>足す・外す・並べ替えをしてから確定すると、PC がリストを作り直しても、このリストは変わりません。' +
@@ -756,10 +821,11 @@
       }
       var gone = byTab('妊鑑', true).concat(byTab('検診', true));
       if (gone.length) {
-        html += F.box('外した牛（' + gone.length + '頭）', '<ul class="list">' + gone.map(function (c) {
+        // 選ばなかった候補はここ（たたんでおく。押すと開いて「戻す」）
+        html += '<details class="rdone rgone"><summary>選ばなかった候補・外した牛（' + gone.length + ' 頭）・押すと開く</summary><ul class="list">' + gone.map(function (c) {
           return '<li><b>' + F.no(c.cow_id, c.mgmt_no) + '</b> ' + F.esc(c.reason || '') +
             ' <button type="button" class="link" data-back="' + c.cow_id + '">戻す</button></li>';
-        }).join('') + '</ul>');
+        }).join('') + '</ul></details>';
       }
     }
     var exm = exclMap(), exIds = Object.keys(exm);
@@ -804,6 +870,11 @@
         if (setExcl(xid, false)) renderList();
         return;
       }
+      if (b.hasAttribute('data-pickstart')) { startPick(); renderList(); window.scrollTo(0, 0); return; }
+      if (b.hasAttribute('data-pickcancel')) { S.pick = false; return renderList(); }
+      if (b.hasAttribute('data-pickall')) { var all1 = b.getAttribute('data-pickall') === '1'; candidates().forEach(function (c) { S.sel[c.cow_id] = all1; }); return renderList(); }
+      if (b.hasAttribute('data-pick')) { var pid = b.getAttribute('data-pick'); S.sel[pid] = !S.sel[pid]; return renderList(); }
+      if (b.hasAttribute('data-pickfix')) { pickFix(); renderList(); window.scrollTo(0, 0); return; }
       if (b.hasAttribute('data-todo')) { S.todo = !S.todo; return renderList(); }
       if (b.hasAttribute('data-fix')) { fixNow(); S.edit = false; return renderList(); }
       if (b.hasAttribute('data-swap')) {
@@ -819,6 +890,14 @@
       if (b.hasAttribute('data-down')) return move(b.getAttribute('data-down'), 1);
       if (b.hasAttribute('data-rm')) return setEdit(b.getAttribute('data-rm'), { removed: true });
       if (b.hasAttribute('data-back')) return setEdit(b.getAttribute('data-back'), { removed: false });
+      if (b.hasAttribute('data-add') && S.pick) {
+        var aid = b.getAttribute('data-add'), led = F.byId()[aid] || {};
+        var atab = b.getAttribute('data-addtab') || S.tab;
+        if (!candidates().some(function (c) { return c.cow_id === aid; }))
+          S.pickAdd.push({ cow_id: aid, mgmt_no: led.mgmt_no, reason: atab === '妊鑑' ? '手で追加・妊鑑' : '手で追加', added: true });
+        S.sel[aid] = true;
+        return renderList();
+      }
       if (b.hasAttribute('data-add')) {
         var id = b.getAttribute('data-add'), on = listNow().filter(function (c) { return c.cow_id === id; })[0];
         if (on) return setEdit(id, { removed: false });
@@ -835,7 +914,9 @@
         var l = lc[c.cow_id], tag = (exq[c.cow_id] ? '繁殖除外中・' : '') + (l ? (l.removed ? 'リストから外した牛' : 'リスト：' + (l.reason || '')) : 'リストに無い牛');
         return '<li class="editrow"><a class="editbody" href="#/repro/cow/' + c.cow_id + '"><span class="no">' + F.no(c) + '</span><span>' +
           F.esc(c.name || '') + '<br><span class="small muted">' + F.esc(tag) + '・' + F.day(c.birth_date) + '生</span></span></a>' +
-          (S.listDate && !on[c.cow_id] ? '<div class="editbtns"><button type="button" data-add="' + c.cow_id + '">＋ ' +
+          (S.pick ? (S.sel[c.cow_id] ? '' : '<div class="editbtns"><button type="button" data-addtab="妊鑑" data-add="' + c.cow_id + '">＋ 妊鑑</button>' +
+                      '<button type="button" data-addtab="検診" data-add="' + c.cow_id + '">＋ 検診</button></div>')
+           : S.fix && !on[c.cow_id] ? '<div class="editbtns"><button type="button" data-add="' + c.cow_id + '">＋ ' +
             (S.tab === '妊鑑' ? '妊鑑' : '検診') + 'に足す</button></div>' : '') + '</li>';
       }).join('');
     };

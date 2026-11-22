@@ -670,11 +670,25 @@
     setEdit(cow, { pos: far ? (rows[j].pos + far.pos) / 2 : rows[j].pos + d * 1000 });
   }
 
+  // ロボットのネック番号（a077 など）でも探す（2026-11-22 本人）。4桁は数字のキーボードのまま打てるよう、
+  // 「a」は横のボタンで付け外しする（数字のキーボードには a が無い。F.find は a077 をレリーの名前として探す）
+  function aKey(id) { return '<button type="button" class="akey" data-akey="' + id + '" aria-label="ネックの番号（a）で探す">a</button>'; }
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest && e.target.closest('[data-akey]');
+    if (!b) return;
+    var q = document.getElementById(b.getAttribute('data-akey'));
+    if (!q) return;
+    q.value = /^a/i.test(q.value) ? q.value.slice(1) : 'a' + q.value;
+    b.classList.toggle('on', /^a/i.test(q.value));
+    q.focus();
+    if (q.oninput) q.oninput();
+  });
+
   function renderList() {
     if (F.tabOf() !== 'repro') return;
     var html = head('list') + datePicker() +
       // 4桁で探す（2026-11-14 本人）。リストの牛もリストに無い牛も、ここから開ける
-      '<div class="rsearch"><input id="rq" type="search" inputmode="numeric" pattern="[0-9]*" placeholder="4桁で探す" autocomplete="off" aria-label="4桁で探す">' +
+      '<div class="rsearch"><div class="aq">' + aKey('rq') + '<input id="rq" type="search" inputmode="numeric" pattern="[0-9]*" placeholder="4桁 か a番号（ネック）" autocomplete="off" aria-label="4桁かネックの番号で探す"></div>' +
       '<ul class="hits" id="rhits"></ul></div>';
     var now = listNow();
     if (!now.length) {
@@ -1603,7 +1617,7 @@
         return '<button type="button" data-kind="' + k + '"' + (ev.kind === k ? ' class="on"' : '') + '>' + k + '</button>';
       }).join('') + '</div>' +
       F.box('牛', (led ? '<p><b class="big">' + F.no(led) + '</b> <span class="small muted">' + F.esc(led.name || '') + '</span></p>' : '') +
-        '<input id="eq" type="search" inputmode="numeric" pattern="[0-9]*" placeholder="4桁" autocomplete="off" aria-label="4桁"><ul class="hits" id="ehits"></ul>') +
+        '<div class="aq">' + aKey('eq') + '<input id="eq" type="search" inputmode="numeric" pattern="[0-9]*" placeholder="4桁 か a番号" autocomplete="off" aria-label="4桁かネックの番号"></div><ul class="hits" id="ehits"></ul>') +
       '<section class="box" id="rform">' + formHtml() + '</section>' +
       '<button type="button" class="wide" data-save="1"' + (ev.cow ? '' : ' disabled') + '>' + (ev.cow ? '残す' : '先に牛を選んでください') + '</button>' +
       '<div id="rrecent">' + recentEvents() + '</div>';

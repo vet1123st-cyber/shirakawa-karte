@@ -537,3 +537,20 @@ main:has(.rokbar) { padding-bottom: calc(160px + env(safe-area-inset-bottom)); }
 .etlist li > a { display: inline-flex; align-items: center; min-height: 44px; }
 .repro-page details.rgone > summary::before { content: "▸"; margin-right: 6px; color: var(--muted); }
 .repro-page details.rgone[open] > summary::before { content: "▾"; }
+
+/* トップの「搾乳頭数・乳量平均・実乳量」を1枚に（2026-11-22）。段の名前と、右の端のいちばん新しい値 */
+.herd.bands text.bandname { font-size: 11px; font-weight: 700; }
+.herd.bands text.bandlast { font-size: 14px; font-weight: 800; }
+.herd.bands .dayband:hover { fill: rgba(127,127,127,.12); }
+
+/* 繁殖の検索：横の「a」でネック番号（a077）でも探す（2026-11-22） */
+.aq { display: flex; gap: 8px; align-items: stretch; }
+.aq input { flex: 1; min-width: 0; }
+.aq .akey { flex: none; width: 52px; min-height: 48px; border-radius: 12px; font-size: 20px; font-weight: 800; background: var(--card); color: var(--ink); border: 1px solid var(--line); }
+.aq .akey.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+/* 4桁にネック番号が付くと幅が足りず名前に重なった（2026-11-22）。番号は折り返さず、名前とすき間をあける */
+.hits .no { white-space: nowrap; flex: none; margin-right: 10px; }
+
+/* 反芻の箱ひげ 初産・経産を2枚（2026-11-22） */
+.rumenhd { font-size: 13px; margin: 10px 0 2px; font-weight: 600; }
+.rumenhd i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; opacity: .7; }

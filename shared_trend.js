@@ -179,12 +179,12 @@
     return { n: a.length, q1: q1, md: mdn, q3: q3, lo: inside[0].v, hi: inside[inside.length - 1].v,
              out: a.filter(function (x) { return x.v < q1 - 1.5 * iqr || x.v > q3 + 1.5 * iqr; }) };
   }
-  // groups: [{label, note, sets:[{name, color, stat}]}]  opt: {unit, ref:{v, label}}
+  // groups: [{label, note, sets:[{name, color, stat}]}]  opt: {unit, ref:{v, label}, slot, fix:[値…], boxW}
   function box(groups, opt) {
     opt = opt || {};
-    var n = groups.length, per = groups[0] ? groups[0].sets.length : 1, slot = Math.max(30, per * 15), L = 36, R = 6, T = 8, B = 30;
+    var n = groups.length, per = groups[0] ? groups[0].sets.length : 1, slot = opt.slot || Math.max(30, per * 15), L = 36, R = 6, T = 8, B = 30;
     var W = Math.max(320, L + R + n * slot), H = 220;
-    var vals = opt.ref ? [opt.ref.v] : [];
+    var vals = (opt.ref ? [opt.ref.v] : []).concat(opt.fix || []);   // fix: 2枚の目もりをそろえるときの値
     groups.forEach(function (gp) { gp.sets.forEach(function (s) { if (s.stat) vals = vals.concat([s.stat.lo, s.stat.hi], s.stat.out.map(function (o) { return o.v; })); }); });
     if (!vals.length) return '';
     var sc = nice(Math.min.apply(null, vals), Math.max.apply(null, vals), 5);
@@ -199,7 +199,7 @@
     groups.forEach(function (gp, i) {
       var cx = L + i * slot + slot / 2, off = per > 1 ? 12 : 0;
       gp.sets.forEach(function (s, j) {
-        var st = s.stat, c = cx + (per > 1 ? (j - (per - 1) / 2) * off : 0), w = 4.8;
+        var st = s.stat, c = cx + (per > 1 ? (j - (per - 1) / 2) * off : 0), w = opt.boxW || 4.8;
         if (!st) return;
         var tip = gp.label + (gp.note ? '（' + gp.note + '）' : '') + '\n' + s.name + ' ' + st.n + '頭\n中央値 ' + fmt(st.md, 0) + u +
           '\n真ん中の半分 ' + fmt(st.q1, 0) + '〜' + fmt(st.q3, 0) + u + '\nひげ ' + fmt(st.lo, 0) + '〜' + fmt(st.hi, 0) + u;
@@ -252,5 +252,82 @@
     return legend + '<svg class="herd" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(opt.a.name + 'と' + opt.b.name) + '">' + g + '</svg>';
   }
 
-  root.FarmTrend = { render: render, xy: xy, box: box, boxStat: boxStat, bars2: bars2, nice: nice, fmt: fmt, hideTip: hideTip };
+  // ---------- 日付をそろえて段を重ねた1枚（段ごとに自分の目もり） ----------
+  // 2026-11-22 本人「搾乳頭数と乳量平均、実乳量の3つをわかりやすく1つのグラフに」。
+  // 単位も大きさも違う3つ（約3,000kg・約90頭・約32kg）を1本の軸に乗せると、どれかが平らに見えて動きが読めない。
+  // そこで日付の軸を1本にそろえ、段を縦に重ねて段ごとに目もりを持たせる。右の端に、いちばん新しい値を大きく書く。
+  // 縦の帯（その日）を押すと、その日の3つが一度に出る。
+  // list: [{name, unit, color, kind:'bar'|'line', dg, pts:[{d, v}]}]
+  function bands(list, opt) {
+    opt = opt || {};
+    var ds = [];
+    list.forEach(function (b) { b.pts.forEach(function (p) { if (p.v != null && ds.indexOf(p.d) < 0) ds.push(p.d); }); });
+    ds.sort();
+    if (ds.length < 2) return '';
+    var W = 340, L = 36, R = 58, T = 2, HEAD = 15, BH = 58, GAP = 10, B = 16;
+    var H = T + list.length * (HEAD + BH) + (list.length - 1) * GAP + B;
+    var step = (W - L - R) / ds.length;
+    var X = function (i) { return L + step * (i + 0.5); };
+    var g = '';
+    list.forEach(function (b, k) {
+      var top = T + k * (HEAD + BH + GAP), y0 = top + HEAD, y1 = y0 + BH;
+      var at = {};
+      b.pts.forEach(function (p) { if (p.v != null) at[p.d] = +p.v; });
+      var vals = Object.keys(at).map(function (d) { return at[d]; });
+      if (!vals.length) return;
+      var mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals), pad = (mx - mn) * 0.15 || Math.abs(mx) * 0.03 || 1;
+      // 棒は 0 から（量の大きさが分かるように）。線は動きが見えるように、値のある幅だけ
+      var sc = b.kind === 'bar' ? nice(0, mx, 2, true) : nice(mn - pad, mx + pad, 2);
+      var Y = function (v) { return y0 + (1 - (v - sc.lo) / (sc.hi - sc.lo || 1)) * BH; };
+      g += '<text x="' + L + '" y="' + (top + 11) + '" class="bandname" fill="' + b.color + '">' + esc(b.name) + '（' + esc(b.unit) + '）</text>';
+      sc.ticks.forEach(function (v) {
+        g += '<line x1="' + L + '" x2="' + (W - R) + '" y1="' + Y(v).toFixed(1) + '" y2="' + Y(v).toFixed(1) + '" class="grid"/>' +
+          '<text x="' + (L - 4) + '" y="' + (Y(v) + 3.5).toFixed(1) + '" text-anchor="end">' + tickLabel(v, sc.step) + '</text>';
+      });
+      if (b.kind === 'bar') {
+        var w = Math.max(1, step * 0.72);
+        ds.forEach(function (d, i) {
+          if (at[d] == null) return;
+          g += '<rect x="' + (X(i) - w / 2).toFixed(1) + '" y="' + Y(at[d]).toFixed(1) + '" width="' + w.toFixed(1) + '" height="' +
+            Math.max(0.5, Y(sc.lo) - Y(at[d])).toFixed(1) + '" fill="' + b.color + '" fill-opacity=".55"/>';
+        });
+      } else {
+        var path = '', on = false;
+        ds.forEach(function (d, i) {
+          if (at[d] == null) { on = false; return; }
+          path += (on ? 'L' : 'M') + X(i).toFixed(1) + ' ' + Y(at[d]).toFixed(1) + ' ';
+          on = true;
+        });
+        g += '<path d="' + path + '" fill="none" stroke="' + b.color + '" stroke-width="2.2"/>';
+      }
+      // いちばん新しい値を右の端に大きく
+      var li = -1;
+      for (var i = ds.length - 1; i >= 0; i--) if (at[ds[i]] != null) { li = i; break; }
+      if (li >= 0) {
+        var lv = at[ds[li]];
+        g += '<circle cx="' + X(li).toFixed(1) + '" cy="' + Y(lv).toFixed(1) + '" r="3" fill="' + b.color + '"/>' +
+          '<text x="' + (W - R + 6) + '" y="' + (Math.min(y1 - 2, Math.max(y0 + 12, Y(lv) + 5))).toFixed(1) + '" class="bandlast" fill="' + b.color + '">' +
+          fmt(lv, b.dg) + '</text>';
+      }
+    });
+    // 日付（はじめ・まん中・おわり）
+    var lastY = H - 4;
+    [0, Math.floor((ds.length - 1) / 2), ds.length - 1].forEach(function (i, j) {
+      g += '<text x="' + X(i).toFixed(1) + '" y="' + lastY + '" text-anchor="' + (j === 0 ? 'start' : j === 2 ? 'end' : 'middle') + '">' + md(ds[i]) + '</text>';
+    });
+    // その日の帯（見えない）に札。押しやすいよう帯は1日の幅いっぱい・段をまたいで縦に長く
+    ds.forEach(function (d, i) {
+      var lines = [d];
+      list.forEach(function (b) {
+        var p = b.pts.filter(function (q) { return q.d === d; })[0];
+        if (p && p.v != null) lines.push(b.name + ' ' + fmt(p.v, b.dg) + ' ' + b.unit);
+      });
+      g += '<rect x="' + (X(i) - step / 2).toFixed(1) + '" y="' + T + '" width="' + step.toFixed(1) + '" height="' + (H - T - B) +
+        '" fill="transparent" class="dayband" data-tip="' + esc(lines.join('\n')) + '"/>';
+    });
+    return '<svg class="herd bands" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' +
+      esc(opt.label || list.map(function (b) { return b.name; }).join('・') + 'の移り変わり') + '">' + g + '</svg>';
+  }
+
+  root.FarmTrend = { render: render, xy: xy, box: box, boxStat: boxStat, bars2: bars2, bands: bands, nice: nice, fmt: fmt, hideTip: hideTip };
 })(window);

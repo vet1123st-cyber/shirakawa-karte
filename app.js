@@ -686,7 +686,7 @@
   // PC の farm_summary.py が毎朝計算して箱の farm_summary 表に置く（ロボットの群の平均・授精率・妊娠率・受胎率）
   function showTop() {
     // ゲノムの行（約270KB）・飼料分析の行（約30KB）・反芻の箱ひげ（約30KB）はそれぞれのページだけで読む
-    loadPage('top', 'top', 'farm_summary?select=section,key,date,value,n,note&section=not.in.(' + encodeURIComponent('ゲノム') + ',' + encodeURIComponent('飼料') + ',' + encodeURIComponent('反芻') + ',' + encodeURIComponent('授精履歴') + ')' +
+    loadPage('top', 'top', 'farm_summary?select=section,key,date,value,n,note&section=not.in.(' + encodeURIComponent('ゲノム') + ',' + encodeURIComponent('飼料') + ',' + encodeURIComponent('反芻') + ',' + encodeURIComponent('反芻週') + ',' + encodeURIComponent('授精履歴') + ',' + encodeURIComponent('繁殖') + ')' +
       '&order=date.asc', drawTop);
   }
 
@@ -703,40 +703,67 @@
     html += '<p><a href="#/business">個体販売・バルク乳の推移 →</a></p>';
     html += robotTop(rows);
     html += rumenTop(rows);
-    html += reproTop(rows);
-    html += box('決めごと', '<dl class="kv">' + Object.keys(set).filter(function (k) { return k !== '計算日'; }).map(function (k) {
+    // 繁殖はトップに出さない（2026-11-22 本人「繁殖はいらない」）。reproTop は残してある（戻すときはここに1行）。
+    // 「決めごと」は受胎率・妊娠率・授精率の決め方だけなので、いっしょに外した（下の if を外せば出る）
+    if (false) html += box('決めごと', '<dl class="kv">' + Object.keys(set).filter(function (k) { return k !== '計算日'; }).map(function (k) {
       return '<dt>' + esc(k.replace('の決め方', '')) + '</dt><dd class="small">' + esc(set[k]) + '</dd>';
     }).join('') + '</dl>');
     app.innerHTML = html;
+    // 反芻の 14日／30日 の切り替え（その箱だけ描き直す）。トップを開くたびに足すと重なるので1回だけ
+    topRows = rows;
+    if (!app._rumenBound) {
+      app._rumenBound = true;
+      app.addEventListener('click', function (e) {
+        var b = e.target.closest && e.target.closest('[data-rspan]');
+        if (!b || !topRows) return;
+        rumenSpan = +b.getAttribute('data-rspan');
+        var el = document.getElementById('rumenTop');
+        if (el) el.outerHTML = rumenTop(topRows);
+        fitRumen();
+      });
+    }
+    fitRumen();
   }
 
+  // 2026-11-22 本人「トップは搾乳頭数と乳量平均、実乳量の3つをわかりやすく1つのグラフに」。
+  // 3つは単位も大きさも違う（約3,000kg・約90頭・約32kg）ので、日付をそろえて3段に重ねた1枚にする（FarmTrend.bands）。
+  // 実乳量＝搾乳している牛の日乳量の合計（PC の farm_summary.py）。いちばん上の数字は前の7日の平均とくらべる
   function robotTop(rows) {
     var milk = pick(rows, 'ロボット', '日乳量');
     if (!milk.length) return box('ロボット', none('まだ記録がありません。'));
+    var heads = pick(rows, 'ロボット', '頭数'), total = pick(rows, 'ロボット', '実乳量');
     var last = milk[milk.length - 1];
-    var wk = milk.slice(-8, -1).map(function (x) { return x.v; });
-    var base = avg(wk);
-    var diff = base == null ? null : last.v - base;
-    var cell = function (key, unit, dg) {
-      var s = pick(rows, 'ロボット', key);
+    var span = 60;                                   // 直近60日（データは 2026-09-15 から）
+    var cut = function (s) { return s.slice(-span); };
+    var cell = function (label, s, unit, dg) {
       if (!s.length) return '';
       var l = s[s.length - 1], b = avg(s.slice(-8, -1).map(function (x) { return x.v; }));
-      return statH(key, n(l.v, dg) + '<span class="small">' + unit + '</span>',
-        b == null ? '' : '前の7日 ' + n(b, dg));
+      var d = b == null ? null : l.v - b;
+      return statH(label, n(l.v, dg) + '<span class="small">' + unit + '</span>',
+        d == null ? '' : '前の7日より ' + (d >= 0 ? '+' : '') + n(d, dg) + unit);
     };
-    return box('ロボット（' + md(last.d) + '）',
-      '<div class="stats"><div class="stat"><div class="label">日乳量（1頭）</div><div class="val big">' + n(last.v, 1) +
-      '<span class="small">kg</span></div><div class="sub">' + (diff == null ? '' : (diff >= 0 ? '+' : '') + n(diff, 1) + ' kg（前の7日とくらべて）') +
-      '</div></div>' + cell('頭数', '頭', 0) + cell('搾乳回数', '回', 2) + '</div>' +
-      trend([{ name: '日乳量', color: 'var(--spark)', pts: milk }], 'kg') +
-      '<div class="stats">' + cell('反芻時間', '分', 0) + cell('リフューズ', '', 2) + cell('失敗', '', 2) + '</div>' +
-      src('レリー Horizon「搾乳可能牛」（搾乳している牛だけの平均。毎朝）'));
+    var FT = window.FarmTrend;
+    return box('搾乳（' + md(last.d) + '）',
+      '<div class="stats">' + cell('実乳量', total, 'kg', 0) + cell('搾乳頭数', heads, '頭', 0) + cell('乳量平均', milk, 'kg', 1) + '</div>' +
+      FT.bands([
+        { name: '実乳量', unit: 'kg', color: 'var(--spark)', kind: 'line', dg: 0, pts: cut(total) },   // 棒（0から）だと 2,900〜3,100kg の動きが平らに見えたので線にした
+        { name: '搾乳頭数', unit: '頭', color: 'var(--spark2)', kind: 'line', dg: 0, pts: cut(heads) },
+        { name: '乳量平均', unit: 'kg/頭', color: '#7f9a4e', kind: 'line', dg: 1, pts: cut(milk) }
+      ], { label: '実乳量・搾乳頭数・乳量平均の移り変わり' }) +
+      '<p class="small muted">日付をそろえて3段に重ねています（段ごとに目もりが違います）。右の数字はいちばん新しい日。棒や線を押すと、その日の3つが出ます。</p>' +
+      '<div class="stats">' + cell('反芻時間', pick(rows, 'ロボット', '反芻時間'), '分', 0) + cell('リフューズ', pick(rows, 'ロボット', 'リフューズ'), '', 2) +
+      cell('失敗', pick(rows, 'ロボット', '失敗'), '', 2) + '</div>' +
+      src('レリー Horizon「搾乳可能牛」（搾乳している牛だけ：搾乳許可あり・前回の搾乳から24時間以内）。実乳量はその牛たちの日乳量の合計、乳量平均は1頭あたり。毎朝'));
   }
 
-  // 反芻の箱ひげ（週ごと・初産と経産）。2026-11-09 本人「トップの反芻は初産と経産に分けて箱ひげ（乾乳牛・トレーニングは除く）」。
-  // PC の rumen_book.py が farm_summary section='反芻週' に置く（7日ずつ・直近12週・各牛の7日平均が1点）。はずれ値を押すとその牛
+  // 反芻の箱ひげ（日ごと・初産と経産）。2026-11-22 本人「反芻の箱ひげ図が欲しい。初産・経産の2つに分けて日ごとの推移」
+  // （11-09 は週ごとだった）。乾乳牛・トレーニングは除く（rumen_book.WHERE）。
+  // PC の rumen_book.py が farm_summary section='反芻日' に置く（1日ずつ・直近30日・1点＝その日の1頭）。はずれ値を押すとその牛
+  // 14日なら横に送らずに1画面に収まる（左の目もりが見える）。30日は横に送る（新しい日＝右の端から見せる）
+  var rumenSpan = 14, topRows = null;
+  function fitRumen() { [].forEach.call(document.querySelectorAll('.rumenday'), function (sc) { sc.scrollLeft = sc.scrollWidth; }); }
   function rumenTop(rows) {
-    var r = rows.filter(function (x) { return x.section === '反芻週' && x.key === 'payload'; })[0];
+    var r = rows.filter(function (x) { return x.section === '反芻日' && x.key === 'payload'; })[0];
     if (!r) return '';
     var P;
     try { P = JSON.parse(r.note); } catch (e) { return ''; }
@@ -745,20 +772,32 @@
     // 札は文字だけ（4桁・レリーの名前・10桁）
     var who = function (id) { var c = byId[id]; return c ? (c.mgmt_no || '') + (c.lely_name ? ' ' + c.lely_name : '') + '（' + id + '）' : id; };
     var pts = function (list) { return (list || []).map(function (x) { return { v: x[0], tip: who(x[1]) }; }); };
-    var st = P.blocks.filter(function (b) { return b.days > 0; });
+    var st = P.blocks.filter(function (b) { return b.days > 0; }).slice(-rumenSpan);
+    if (!st.length) return '';
     var last = st[st.length - 1], lf = FT.boxStat(pts(last.first)), lm = FT.boxStat(pts(last.multi));
     var cellOf = function (label, s) {
-      return statH(label, s ? n(s.md, 0) + '<span class="small">分</span>' : '—', s ? s.n + '頭・' + n(s.q1, 0) + '〜' + n(s.q3, 0) : '');
+      return statH(label, s ? n(s.md, 0) + '<span class="small">分</span>' : '—', s ? s.n + '頭・真ん中の半分 ' + n(s.q1, 0) + '〜' + n(s.q3, 0) : '');
     };
-    return box('反芻（週ごと・' + md(last.start) + '〜' + md(last.end) + '）',
-      '<div class="stats">' + cellOf('初産の中央値', lf) + cellOf('経産の中央値', lm) + '</div>' +
-      '<div class="legend"><span><i style="background:var(--spark2)"></i>初産（産次1）</span><span><i style="background:var(--spark)"></i>経産（産次2以上）</span></div>' +
-      '<div class="scroll">' + FT.box(st.map(function (b) {
-        return { label: md(b.end), note: md(b.start) + '〜' + md(b.end) + '・' + b.days + '日分', mark: b.days < 7 ? b.days + '日' : '',
-                 sets: [{ name: '初産', color: 'var(--spark2)', stat: FT.boxStat(pts(b.first)) }, { name: '経産', color: 'var(--spark)', stat: FT.boxStat(pts(b.multi)) }] };
-      }), { unit: '分', ref: { v: 400, label: '400分: ロボットの点検で「反芻が短い」とする線' }, label: '週ごとの反芻時間の箱ひげ図' }) + '</div>' +
-      '<p class="small muted">1点＝1頭の7日平均。箱は真ん中の半分、中の線は中央値、点ははずれた牛（押すと番号）。日付は週の終わりの日。</p>' +
-      src('レリー Horizon。' + (P.rule || '')) + '<p class="small"><a href="#/feed/analysis/rumen">3日ごと・90日まで見る →</a></p>');
+    var wd = '日月火水木金土';
+    // 2026-11-22 本人「初産と経産の箱ひげ図の推移はグラフを2つに分けて」→ 1枚に1つ。目もりは2枚でそろえる（くらべやすく）
+    var fix = [];
+    st.forEach(function (b) { ['first', 'multi'].forEach(function (k) { var s = FT.boxStat(pts(b[k])); if (s) fix = fix.concat([s.lo, s.hi], s.out.map(function (o) { return o.v; })); }); });
+    var rchart = function (name, color, k) {
+      return '<h4 class="rumenhd"><i style="background:' + color + '"></i>' + name + '</h4>' +
+        '<div class="scroll rumenday">' + FT.box(st.map(function (b) {
+          var dt = new Date(b.end + 'T00:00:00');
+          return { label: md(b.end), note: md(b.end) + '（' + wd[dt.getDay()] + '）', sets: [{ name: name.replace(/（.*/, ''), color: color, stat: FT.boxStat(pts(b[k])) }] };
+        }), { unit: '分', slot: rumenSpan <= 14 ? 21 : 24, boxW: 6, fix: fix, ref: { v: 400, label: '400分: ロボットの点検で「反芻が短い」とする線' }, label: '日ごとの反芻時間の箱ひげ図（' + name + '）' }) + '</div>';
+    };
+    return '<div id="rumenTop">' + box('反芻（日ごと・' + md(st[0].end) + '〜' + md(last.end) + '）',
+      '<div class="seg">' + [14, 30].map(function (k) {
+        return '<button type="button" data-rspan="' + k + '"' + (rumenSpan === k ? ' class="on"' : '') + '>直近' + k + '日</button>';
+      }).join('') + '</div>' +
+      '<div class="stats">' + cellOf('初産の中央値（' + md(last.end) + '）', lf) + cellOf('経産の中央値（' + md(last.end) + '）', lm) + '</div>' +
+      rchart('初産（産次1）', 'var(--spark2)', 'first') + rchart('経産（産次2以上）', 'var(--spark)', 'multi') +
+      '<p class="small muted">1点＝その日の1頭の反芻時間（分）。箱は真ん中の半分、中の線は中央値、点ははずれた牛（押すと番号）。' +
+      st.length + '日分（データの無い日は出ません）' + (rumenSpan > 14 ? '。横に送ると前の日' : '') + '。</p>' +
+      src('レリー Horizon。' + (P.rule || '')) + '<p class="small"><a href="#/feed/analysis/rumen">3日ごと・90日まで見る →</a></p>') + '</div>';
   }
 
   function reproTop(rows) {

@@ -14,6 +14,7 @@
   --chip: #eef0ec;
   --spark: #2f7d62;
   --spark2: #b07a1a;
+  --on-accent: #ffffff;      /* accent の上の字（ダークでは濃い色） */
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -31,6 +32,7 @@
     --chip: #26302b;
     --spark: #6cc3a0;
     --spark2: #e0b45a;
+    --on-accent: #0b2a1f;
   }
 }
 * { box-sizing: border-box; }
@@ -68,7 +70,7 @@ input[type=email], input[type=password], input[type=text], input[type=search] {
 }
 button, .btn {
   font: inherit; font-size: 16px; border: 0; border-radius: 10px; padding: 12px 16px;
-  background: var(--accent); color: #fff; min-height: 44px; cursor: pointer;
+  background: var(--accent); color: var(--on-accent); min-height: 44px; cursor: pointer;
 }
 button.ghost { background: transparent; color: inherit; border: 1px solid currentColor; padding: 4px 10px; min-height: 32px; font-size: 13px; }
 button.link { background: none; color: var(--accent); padding: 8px 0; min-height: 0; }
@@ -179,7 +181,7 @@ button:disabled { opacity: .5; }
 /* ゲノム */
 .seg { display: flex; gap: 6px; margin-top: 10px; }
 .seg button { flex: 1; background: var(--card); color: var(--ink); border: 1px solid var(--line); padding: 10px 4px; }
-.seg button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.seg button.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .pickers { display: flex; gap: 8px; margin-top: 10px; }
 .pickers select { flex: 1; font-size: 16px; min-height: 44px; padding: 8px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--ink); }
 .pickers select:last-child:not(:first-child) { flex: 0 0 6em; }
@@ -191,8 +193,8 @@ button:disabled { opacity: .5; }
 /* 繁殖（検診アプリから移した入力。押すところは44px以上・文字は16px以上） */
 .segbtn { flex: 1; text-align: center; background: var(--card); color: var(--ink); border: 1px solid var(--line);
   border-radius: 10px; padding: 10px 4px; min-height: 44px; text-decoration: none; font-weight: 600; }
-.segbtn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
-.seg button.primary { background: var(--accent); color: #fff; }
+.segbtn.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.seg button.primary { background: var(--accent); color: var(--on-accent); }
 .rbar { margin-top: 8px; font-size: 13px; color: var(--muted); }
 .rbar.wait { background: var(--warn-bg); color: var(--warn); padding: 8px 10px; border-radius: 10px; }
 .hits .done { border-color: var(--accent); }
@@ -206,7 +208,7 @@ button:disabled { opacity: .5; }
 .field.big > label { font-weight: 700; color: var(--ink); font-size: 15px; }
 .opts { display: flex; flex-wrap: wrap; gap: 6px; }
 .opts button { background: var(--chip); color: var(--ink); border: 1px solid var(--line); min-width: 48px; padding: 10px 12px; touch-action: manipulation; }
-.opts button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.opts button.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .field.big .opts button { min-height: 52px; font-size: 17px; }
 .inline { margin-top: 6px; }
 .inline input, .field input[type=number], .field input[type=text], .field textarea, .pickers input[type=date] {
@@ -433,7 +435,7 @@ main { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
 .mm { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .opts .mm button, .field.big .opts .mm button { min-width: 38px; min-height: 40px; padding: 6px 4px; font-size: 15px; }
 .mm select { min-height: 40px; padding: 4px; border: 1px solid var(--line); border-radius: 8px; background: var(--chip); color: var(--ink); font-size: 15px; }
-.mm select.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.mm select.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .opts .mm button.ovdel { background: none; border: none; color: var(--muted, #888); font-size: 20px; }
 
 /* 検診レポートの下見（PDF と同じ絵） */
@@ -444,7 +446,7 @@ main { padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
 .pickers.rdate input[type=date] { flex: 1; }
 .rsearch { margin: 0 0 10px; }
 .rsearch input { width: 100%; box-sizing: border-box; font-size: 18px; min-height: 48px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--ink); }
-button.wide.primary { background: var(--accent); color: #fff; border: 0; border-radius: 12px; font-weight: 700; }
+button.wide.primary { background: var(--accent); color: var(--on-accent); border: 0; border-radius: 12px; font-weight: 700; }
 .hits li.flash > a { animation: rflash 1.6s ease-out; }
 @keyframes rflash { from { background: var(--warn-bg); } to { background: transparent; } }
 .rhist li { line-height: 1.7; }
@@ -459,7 +461,7 @@ button.wide.primary { background: var(--accent); color: #fff; border: 0; border-
 .rleft .small { flex: 1; }
 .chipbtn { display: inline-block; background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 999px;
   padding: 8px 14px; min-height: 44px; box-sizing: border-box; font-size: 14px; text-decoration: none; line-height: 26px; }
-.chipbtn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+.chipbtn.on { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
 .rmiss { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
 .rhseg { margin: 0 0 8px; }
 .rhseg button { padding: 6px 4px; font-size: 13px; }
@@ -475,7 +477,7 @@ main:has(.rokbar) { padding-bottom: calc(160px + env(safe-area-inset-bottom)); }
 .rokbar .sbrow { max-width: 688px; margin: 0 auto; display: flex; align-items: center; gap: 12px; }
 .rokbar .sbinfo { flex: 1; min-width: 0; font-size: 13px; line-height: 1.35; max-height: 4.05em; overflow: hidden; }
 .rokbar .sbinfo b { font-size: 17px; }
-.rokbar .sbbtn { background: var(--accent); color: #fff; border: 0; font-weight: 800; font-size: 18px; min-height: 52px; min-width: 128px; border-radius: 14px; }
+.rokbar .sbbtn { background: var(--accent); color: var(--on-accent); border: 0; font-weight: 800; font-size: 18px; min-height: 52px; min-width: 128px; border-radius: 14px; }
 .rres li a { align-items: flex-start; }
 .head > a.link { display: block; margin-top: 8px; }
 
@@ -485,3 +487,53 @@ main:has(.rokbar) { padding-bottom: calc(160px + env(safe-area-inset-bottom)); }
 /* 体測の分析（2026-11-15） */
 .tbl tr.on td { background: var(--chip); }
 .tbl td a { color: var(--accent); }
+
+/* ---------- 繁殖の使いやすさ（2026-11-19）。.repro-page は繁殖を開いているあいだ body に付く ---------- */
+.rbar.quiet { display: none; }
+.repro-page .small, .repro-page .list .d, .repro-page .head .id { font-size: 14px; }
+.repro-page .back { display: inline-flex; align-items: center; min-height: 44px; margin: 0; padding-right: 6px; white-space: nowrap; }
+.repro-page .pickers input[type=date] { min-height: 44px; }
+.rtopbar { display: flex; align-items: center; gap: 8px; margin: 0 0 6px; }
+.rtopbar .pickers { flex: 1; margin: 0; min-width: 0; }
+.rtopbar .pickers label { display: none; }
+.rcowhead { padding: 10px 14px; }
+.rcowhead .no { font-size: 34px; }
+.rcowhead .facts { grid-template-columns: repeat(5, 1fr); gap: 4px 6px; margin: 6px 0 2px; }
+.rcowhead .fact b { font-size: 17px; }
+.rcowhead .fact span { font-size: 12px; }
+#rai .box { padding: 10px 14px; }
+#rai .rai li { padding: 6px 0; line-height: 1.5; }
+#rai .box h3 { margin-bottom: 2px; }
+#rai .box > p.small { margin: 0 0 2px; }
+.repro-page details > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+/* 一覧の見出し（1行） */
+.rlisthead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 8px; margin: 4px 0 0; }
+.rlisthead .rbtns { display: flex; gap: 6px; }
+.rlisthead .chipbtn { padding: 8px 12px; }
+.rflash { margin: 4px 0 0; }
+.hits a.part { border-color: var(--warn); }
+.rdone { margin-top: 12px; }
+.rdone > summary { background: var(--ok-bg); border-radius: 12px; padding: 0 14px; font-weight: 700; color: var(--accent); list-style: none; }
+.rdone > summary::-webkit-details-marker { display: none; }
+.rdone[open] > summary { margin-bottom: 6px; }
+/* 卵巣: mm を選んだ行は1行にたたむ。ボタンは 44px */
+.repro-page .opts .mm button, .repro-page .field.big .opts .mm button { min-width: 44px; min-height: 44px; }
+.repro-page .mm select { min-height: 44px; font-size: 16px; }
+.ovrow.ovdone { display: flex; align-items: center; gap: 8px; }
+.ovrow.ovdone .ovname { flex: 1; font-weight: 700; font-size: 18px; }
+.opts .ovrow.ovdone button.ovedit { background: none; border: 1px solid var(--line); color: var(--accent); min-height: 44px; min-width: 60px; padding: 6px 10px; font-size: 15px; }
+.repro-page .opts .mm button.ovdel, .opts .ovrow.ovdone button.ovdel { min-width: 44px; min-height: 44px; }
+/* いちばん下の「その他」（取り消し・繁殖除外）。よく押す所から離す */
+.rother { margin-top: 28px; }
+.rother h3 { color: var(--muted); }
+.rother .rdanger { display: block; width: 100%; margin-top: 10px; background: none; color: var(--warn); border: 1px solid var(--line); min-height: 48px; }
+/* OK バー: 送信の印と「次 ›」 */
+.rokbar .oksend { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.rokbar .oksend.wait { color: var(--warn); font-weight: 700; }
+.rokbar .sbbtn { min-width: 104px; }
+.rokbar .sbnext { background: var(--card); color: var(--accent); border: 2px solid var(--accent); font-weight: 800; font-size: 17px; min-height: 52px; min-width: 64px; border-radius: 14px; padding: 8px 10px; }
+.rokbar .sbinfo { font-size: 14px; }
+/* ET の一覧: 牛番号を押しやすく */
+.etlist li > a { display: inline-flex; align-items: center; min-height: 44px; }
+.repro-page details.rgone > summary::before { content: "▸"; margin-right: 6px; color: var(--muted); }
+.repro-page details.rgone[open] > summary::before { content: "▾"; }

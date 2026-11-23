@@ -252,7 +252,28 @@
       psps: 'psps?select=date,sample,item,value,note,source&order=date.asc'
     }[S.sub];
     if (!q) return;
-    F.get(q).then(function (rows) {
+    var got = F.get(q);
+    // 2026-11-23 本人「BCS・RF は 農場訪問の記録 と 繁殖のとき の2つ。前回の記録を見て、今回を入れる」:
+    // 記録（cow_score）に、繁殖の検診で入れた BCS・RF（PC が取り込んだ v_repro_exam と、まだの箱の input_repro）を混ぜて日付の順に
+    if (S.sub === 'bcs' && S.cow) {
+      var cow = S.cow;
+      var r2 = F.get('v_repro_exam?select=date,bcs,rumen_fill&cow_id=eq.' + cow + '&or=(bcs.not.is.null,rumen_fill.not.is.null)&order=date.desc&limit=6')
+        .then(function (rows) { return (rows || []).map(function (x) { x.source = '繁殖'; return x; }); }).catch(function () { return []; });
+      var r3 = F.get('input_repro?select=date,data,deleted&cow_id=eq.' + cow + '&deleted=eq.false&order=date.desc&limit=20').then(function (rows) {
+        return (rows || []).filter(function (x) { var d = x.data || {}; return !x.deleted && (d.bcs != null || d.rumen_fill != null); })
+          .map(function (x) { return { date: x.date, bcs: x.data.bcs, rumen_fill: x.data.rumen_fill, source: '繁殖' }; });
+      }).catch(function () { return []; });
+      got = Promise.all([got, r2, r3]).then(function (a) {
+        var seen = {}, out = [];
+        (a[0] || []).map(function (x) { x.source = '訪問'; return x; }).concat(a[1], a[2]).forEach(function (x) {
+          var k = x.date + '|' + (x.bcs == null ? '' : Number(x.bcs)) + '|' + (x.rumen_fill == null ? '' : Number(x.rumen_fill));
+          if (seen[k]) return;
+          seen[k] = 1; out.push(x);
+        });
+        return out.sort(function (x, y) { return String(y.date).localeCompare(String(x.date)); });
+      });
+    }
+    got.then(function (rows) {
       if (F.tabOf() !== 'record' || !document.getElementById('rhist')) return;
       var html = S.sub === 'body' || S.sub === 'bcs' ? cowHistory(rows) : groupHistory(rows);
       if (S.sub === 'body' || S.sub === 'bcs') { var p = document.getElementById('cprev'); if (p) p.innerHTML = html; }
@@ -272,8 +293,9 @@
     return mini + '<ul class="list">' + rows.slice(0, 6).map(function (r) {
       return '<li><span class="d">' + F.day(r.date) + '</span>　' + (S.sub === 'body'
         ? '胸囲 ' + F.n(r.chest_cm) + 'cm・推定 ' + F.n(r.weight_est, 1) + 'kg' + (r.ratio != null ? '・充足率 ' + F.n(r.ratio) + '%' : '')
-        : (r.bcs != null ? 'BCS ' + F.n(r.bcs, 2) : '') + (r.rumen_fill != null ? '・RFS ' + r.rumen_fill : '')) + '</li>';
-    }).join('') + '</ul>' + F.src(S.sub === 'body' ? '体高BW.xlsx と白川Farm（PC が毎朝取り込んだもの）' : '白川Farm（PC が毎朝取り込んだもの）');
+        : (r.bcs != null ? 'BCS ' + F.n(r.bcs, 2) : '') + (r.rumen_fill != null ? '・RFS ' + r.rumen_fill : '') +
+          (r.source === '繁殖' || r.source === '訪問' ? ' <span class="chip">' + r.source + '</span>' : '')) + '</li>';
+    }).join('') + '</ul>' + F.src(S.sub === 'body' ? '体高BW.xlsx と白川Farm（PC が毎朝取り込んだもの）' : '白川Farm の記録（訪問）と繁殖の検診で入れた BCS・RF');
   }
 
   function groupHistory(rows) {

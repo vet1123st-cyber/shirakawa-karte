@@ -589,3 +589,8 @@ main:has(.rokbar) { padding-bottom: calc(160px + env(safe-area-inset-bottom)); }
 .c-red { color: var(--red); font-weight: 700; }
 .chip.c-alert { background: var(--orange-bg); color: var(--orange); font-weight: 700; }
 .hits li.alert > a, .pickrow.alert { box-shadow: inset 5px 0 0 var(--orange); }
+
+/* 全頭おわり・過去のリスト（2026-11-23 本人：リストはその日だけ、入れるたびに減る） */
+.rfin { background: var(--ok-bg); }
+.rfin .btnlink { display: block; text-align: center; margin-top: 10px; padding: 14px; border-radius: 12px; background: var(--accent); color: var(--on-accent); text-decoration: none; font-weight: 700; }
+.rpast summary { font-weight: 700; }

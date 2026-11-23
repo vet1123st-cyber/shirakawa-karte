@@ -685,9 +685,9 @@
   // ------------------------------------------------------------ 画面: トップ
   // PC の farm_summary.py が毎朝計算して箱の farm_summary 表に置く（ロボットの群の平均・授精率・妊娠率・受胎率）
   function showTop() {
-    // ゲノムの行（約270KB）・飼料分析の行（約30KB）・反芻の箱ひげ（約30KB）はそれぞれのページだけで読む
-    loadPage('top', 'top', 'farm_summary?select=section,key,date,value,n,note&section=not.in.(' + encodeURIComponent('ゲノム') + ',' + encodeURIComponent('飼料') + ',' + encodeURIComponent('反芻') + ',' + encodeURIComponent('反芻週') + ',' + encodeURIComponent('授精履歴') + ',' + encodeURIComponent('繁殖') + ')' +
-      '&order=date.asc', drawTop);
+    // ゲノムの行（約270KB）・飼料分析の行（約30KB）・反芻の箱ひげ（約30KB）・牧場の歩み（約800行）はそれぞれのページだけで読む
+    loadPage('top', 'top', 'farm_summary?select=section,key,date,value,n,note&section=not.in.(' + encodeURIComponent('ゲノム') + ',' + encodeURIComponent('飼料') + ',' + encodeURIComponent('反芻') + ',' + encodeURIComponent('反芻週') + ',' + encodeURIComponent('授精履歴') + ',' + encodeURIComponent('繁殖') + ',' + encodeURIComponent('牧場の歩み') + ')' +
+      '&order=date.asc', drawTop, true);
   }
 
   function pick(rows, sec, key) {
@@ -977,12 +977,13 @@
   //   kind 実際（過去13か月の月末）／いま／見通し（1年先。lo〜hi は300回くり返したうちの下10%〜上10%）／設定
   var ROOMS = ['搾乳（ロボット）', 'つなぎ', '乾乳前期', '分娩舎', '哺乳・D型', '育成舎'];
   // まとめの画面（トップ・頭数…）の読み方。控えがあればすぐ出し、裏で新しくする
-  function loadPage(tab, memoKey, path, draw) {
+  // all=true: 箱は1回に1,000行までしか返さないので、getAll で全部読む（2026-11-23 トップが1,000行を超えて反芻の行が落ちた）
+  function loadPage(tab, memoKey, path, draw, all) {
     var m = memo(memoKey);
     if (m && m.v) draw(m.v, '<p class="small muted" id="stale">' + md(new Date(m.at).toISOString()) + ' ' +
       new Date(m.at).toTimeString().slice(0, 5) + ' に読んだ控えです。新しくしています…</p>');
     else app.innerHTML = '<p class="muted pad">読んでいます…</p>';
-    get(path)
+    (all ? getAll(path) : get(path))
       .then(function (r) {
         if (tabOf() !== tab) return;
         memo(memoKey, r);

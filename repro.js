@@ -628,6 +628,35 @@
     });
     return out;
   }
+  // ---------- 妊鑑＋はリストから外す（2026-11-23 本人「妊鑑＋になったらリストから外してほしい」） ----------
+  // その牛のいちばん新しい日の所見（妊鑑・検診）に 妊鑑＋ があれば「妊娠」（次の手が「再妊鑑」なら残す）。候補にも確定したリストにも出さない
+  // （確定したリストでは消さずに、下の「妊鑑＋で外した牛」にたたむ＝押し間違いを開いて直せる。レポートの数はそのまま）
+  function pregMap() {
+    var s = store(), last = {}, ids = {}, out = {};
+    var mine = Object.keys(s).map(function (k) { return s[k]; });
+    mine.forEach(function (r) { ids[r.id] = 1; });
+    mine.concat(S.server.filter(function (r) { return !ids[r.id]; })).forEach(function (r) {
+      if (r.deleted || (r.kind !== '妊娠鑑定' && r.kind !== '繁殖検診')) return;
+      var L = last[r.cow_id];
+      if (!L || r.date > L.date) L = last[r.cow_id] = { date: r.date, rows: [] };
+      if (r.date === L.date) L.rows.push(r);
+    });
+    Object.keys(last).forEach(function (id) {
+      var hit = last[id].rows.filter(function (r) { var d = r.data || {}; return d.preg_check === '＋' && d.plan !== '再妊鑑'; })[0];
+      if (hit) out[id] = hit;
+    });
+    return out;
+  }
+  // 繁殖検診は分娩後 EXAM_MIN_DIM 日から（2026-11-23 本人）。理由が「未授精」だけで、今日の DIM がまだ届かない牛は候補に出さない
+  // （処置後・ET予定などほかの理由がある牛は出す。PC の make_exam_list も同じ決まりで外す）
+  var EXAM_MIN_DIM = 40;
+  function tooEarly(c) {
+    if (c.dim == null || isPreg(c)) return false;
+    var rest = String(c.reason || '').split('・').filter(function (x) { return x && x !== '未授精'; });
+    if (rest.length) return false;
+    var gap = S.pcDate ? Math.max(0, Math.round((Date.parse(localDate()) - Date.parse(S.pcDate)) / 864e5)) : 0;
+    return c.dim + gap < EXAM_MIN_DIM;
+  }
   function setExcl(cow, on) {
     var ex = exclMap()[cow], me = F.me();
     if (on) {
@@ -689,10 +718,11 @@
   // 2 リスト: 「リストを作る」→ 候補（PC が前日に作る案＝レリー22・23・分娩・処置・未経産）→ 選ぶ → 「リスト確定」→ そのリストで検診して入れる
   // 選ぶ画面は S.pick。選んだ牛は S.sel、4桁で足した牛は S.pickAdd。確定は今までの fixList（外した牛は removed で残る＝あとで戻せる）
   function candidates() {
-    var ex = exclMap(), seen = {}, out = [];
-    var push = function (c) { if (!c || seen[c.cow_id] || ex[c.cow_id]) return; seen[c.cow_id] = 1; out.push(c); };
-    S.list.forEach(push);
-    if (S.fix) listNow().sort(function (a, b) { return a.pos - b.pos; }).forEach(push);
+    var ex = exclMap(), pg = pregMap(), seen = {}, out = [];
+    var push = function (c) { if (!c || seen[c.cow_id] || ex[c.cow_id] || pg[c.cow_id]) return; seen[c.cow_id] = 1; out.push(c); };
+    S.list.forEach(function (c) { if (!tooEarly(c)) push(c); });
+    // 確定したリストの牛も候補に戻す（選んでいた牛はそのまま。選ばなかった牛は、分娩後40日前なら出さない）
+    if (S.fix) listNow().sort(function (a, b) { return a.pos - b.pos; }).forEach(function (c) { if (!(c.removed && tooEarly(c))) push(c); });
     (S.pickAdd || []).forEach(push);
     return out;
   }
@@ -787,7 +817,9 @@
             (t === '妊鑑' ? '妊娠鑑定' : '繁殖検診') + ' ' + done + '/' + rows.length + '</button>';
         }).join('') + '</div>';
       // 入力済みは下の「入力済み（N頭）」にたたむ。リストを直しているあいだは全部を並べる（並び替えのため）
-      var all = byTab(S.tab), todo = S.edit ? all : all.filter(function (c) { return stateOf(c) !== 'done'; });
+      var pgm = pregMap(), pgOut = S.edit ? [] : byTab('妊鑑').concat(byTab('検診')).filter(function (c) { return pgm[c.cow_id]; });
+      var all = byTab(S.tab).filter(function (c) { return S.edit || !pgm[c.cow_id]; });
+      var todo = S.edit ? all : all.filter(function (c) { return stateOf(c) !== 'done'; });
       var fin = S.edit ? [] : all.filter(function (c) { return stateOf(c) === 'done'; });
       if (!todo.length) html += F.none(all.length ? '✓ このタブの牛はぜんぶ入力済みです。' : 'このタブの牛はいません。');
       var row = function (c) {
@@ -818,6 +850,12 @@
       if (fin.length) {
         html += '<details class="rdone" id="rdone"' + (S.doneOpen ? ' open' : '') + '><summary>✓ 入力済み（' + fin.length + ' 頭）・押すと開く</summary>' +
           '<ul class="hits">' + fin.map(row).join('') + '</ul></details>';
+      }
+      if (pgOut.length) {
+        html += '<details class="rdone rgone"><summary>妊鑑＋でリストから外した牛（' + pgOut.length + ' 頭）・押すと開く</summary><ul class="list">' + pgOut.map(function (c) {
+          return '<li><a href="#/repro/cow/' + c.cow_id + '"><b>' + F.no(c.cow_id, c.mgmt_no) + '</b></a> <span class="small muted">' +
+            F.md(pgm[c.cow_id].date) + ' 妊鑑＋（押し間違いは牛を開いて直す）</span></li>';
+        }).join('') + '</ul></details>';
       }
       var gone = byTab('妊鑑', true).concat(byTab('検診', true));
       if (gone.length) {
@@ -1627,7 +1665,8 @@
       clearTimeout(timer); send();
       S.back = S.open; S.mode = ''; S.more = false;
       var bc = cowRow();
-      if (bc && stateOf(bc) === 'done') S.flashMsg = '✓ ' + String(bc.mgmt_no || '') + ' を入力済みにしました（下の「入力済み」にあります）';
+      if (bc && pregMap()[bc.cow_id]) S.flashMsg = '✓ ' + String(bc.mgmt_no || '') + ' は妊鑑＋なので、リストから外しました';
+      else if (bc && stateOf(bc) === 'done') S.flashMsg = '✓ ' + String(bc.mgmt_no || '') + ' を入力済みにしました（下の「入力済み」にあります）';
       location.hash = '#/repro';
       return;
     }

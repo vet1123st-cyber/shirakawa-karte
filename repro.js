@@ -650,12 +650,42 @@
   // 繁殖検診は分娩後 EXAM_MIN_DIM 日から（2026-11-23 本人）。理由が「未授精」だけで、今日の DIM がまだ届かない牛は候補に出さない
   // （処置後・ET予定などほかの理由がある牛は出す。PC の make_exam_list も同じ決まりで外す）
   var EXAM_MIN_DIM = 40;
+  // 今日の DIM（PC の DIM ＋ 候補を作った日からの日数）
+  function dimToday(c) {
+    if (c.dim == null) return null;
+    var gap = S.pcDate ? Math.max(0, Math.round((Date.parse(localDate()) - Date.parse(S.pcDate)) / 864e5)) : 0;
+    return c.dim + gap;
+  }
   function tooEarly(c) {
     if (c.dim == null || isPreg(c)) return false;
     var rest = String(c.reason || '').split('・').filter(function (x) { return x && x !== '未授精'; });
     if (rest.length) return false;
-    var gap = S.pcDate ? Math.max(0, Math.round((Date.parse(localDate()) - Date.parse(S.pcDate)) / 864e5)) : 0;
-    return c.dim + gap < EXAM_MIN_DIM;
+    return dimToday(c) < EXAM_MIN_DIM;
+  }
+  // ---------- 目で拾う印（2026-11-23 本人） ----------
+  // 「ET予定はオレンジ文字、日乳量が45kg 以上ならオレンジ、50kg 以上なら赤。未授精で60日を超えたらオレンジで注意の印」
+  var MILK_WARN = 45, MILK_HIGH = 50, OPEN_WARN_DIM = 60;
+  function reasonHtml(c) { return F.esc(c.reason || '').replace('ET予定', '<span class="c-orange">ET予定</span>'); }
+  function milkHtml(v) {
+    if (v == null || v === '') return '';
+    var n = Number(v), cls = n >= MILK_HIGH ? 'c-red' : n >= MILK_WARN ? 'c-orange' : '';
+    return cls ? '<span class="' + cls + '">' + F.esc(F.n(n, 1)) + 'kg</span>' : F.esc(F.n(n, 1)) + 'kg';
+  }
+  function openLong(c) {
+    var d = dimToday(c);
+    return /未授精/.test(c.reason || '') && d != null && d > OPEN_WARN_DIM ? d : 0;
+  }
+  function alertChip(c) {
+    var d = openLong(c);
+    return d ? ' <span class="chip c-alert">⚠ 未授精 ' + d + '日</span>' : '';
+  }
+  // 産次・DIM・AI後・精液・乳量 の1行（乳量だけ色が付くので、ひとつずつ esc してからつなぐ）
+  function factsHtml(c, milk) {
+    var a = [c.parity != null ? c.parity + '産' : '', c.dim != null ? 'DIM ' + dimToday(c) : '',
+             c.days_after_ai != null ? 'AI後' + c.days_after_ai + '日' : '', c.last_semen || ''].filter(Boolean).map(F.esc);
+    var m = milk ? milkHtml(c.milk_kg) : '';
+    if (m) a.push(m);
+    return a.join('・');
   }
   function setExcl(cow, on) {
     var ex = exclMap()[cow], me = F.me();
@@ -758,12 +788,11 @@
       h += '<h3 class="pickhd">' + (t === '妊鑑' ? '妊娠鑑定' : '繁殖検診') + ' <span class="small muted">' + on + ' / ' + g.length + ' 頭</span></h3><ul class="hits picks">' +
         g.map(function (c) {
           var sel = !!S.sel[c.cow_id];
-          var facts = [c.parity != null ? c.parity + '産' : '', c.dim != null ? 'DIM ' + c.dim : '',
-                       c.days_after_ai != null ? 'AI後' + c.days_after_ai + '日' : '', c.last_semen || ''].filter(Boolean).join('・');
-          return '<li><button type="button" class="pickrow' + (sel ? ' on' : '') + '" data-pick="' + c.cow_id + '" aria-pressed="' + sel + '">' +
+          var facts = factsHtml(c, true);
+          return '<li><button type="button" class="pickrow' + (sel ? ' on' : '') + (openLong(c) ? ' alert' : '') + '" data-pick="' + c.cow_id + '" aria-pressed="' + sel + '">' +
             '<span class="pk">' + (sel ? '✓' : '') + '</span><span class="no">' + F.no(c.cow_id, c.mgmt_no) + '</span><span class="pb">' +
-            F.esc(c.reason || '') + (c.added ? ' <span class="chip out">足した</span>' : '') +
-            (facts ? '<br><span class="small muted">' + F.esc(facts) + '</span>' : '') +
+            reasonHtml(c) + alertChip(c) + (c.added ? ' <span class="chip out">足した</span>' : '') +
+            (facts ? '<br><span class="small muted">' + facts + '</span>' : '') +
             (c.note ? '<br><span class="small">' + F.esc(c.note) + '</span>' : '') + '</span></button></li>';
         }).join('') + '</ul>';
     });
@@ -824,14 +853,12 @@
       if (!todo.length) html += F.none(all.length ? '✓ このタブの牛はぜんぶ入力済みです。' : 'このタブの牛はいません。');
       var row = function (c) {
         var got = inputsOf(c.cow_id), st = stateOf(c);
-        var facts = [c.parity != null ? c.parity + '産' : '', c.dim != null ? 'DIM ' + c.dim : '',
-                     c.days_after_ai != null ? 'AI後' + c.days_after_ai + '日' : '', c.last_semen || '',
-                     c.milk_kg != null ? F.n(c.milk_kg, 1) + 'kg' : ''].filter(Boolean).join('・');
+        var facts = factsHtml(c, true);
         var me = F.me();
-        var body = '<span class="no">' + F.no(c.cow_id, c.mgmt_no) + '</span><span>' + F.esc(c.reason || '') +
+        var body = '<span class="no">' + F.no(c.cow_id, c.mgmt_no) + '</span><span>' + reasonHtml(c) + alertChip(c) +
           (c.isNew ? ' <span class="chip out">新</span>' : '') + (st === 'part' ? ' <span class="chip out">途中</span>' : '') +
           (c.repro_status ? '<span class="small muted">（' + F.esc(c.repro_status) + '）</span>' : '') +
-          (facts ? '<br><span class="small muted">' + F.esc(facts) + '</span>' : '') +
+          (facts ? '<br><span class="small muted">' + facts + '</span>' : '') +
           (c.note ? '<br><span class="small">' + F.esc(c.note) + '</span>' : '') +
           (got.length ? '<br><span class="small ' + (st === 'part' ? 'warn' : 'ok') + '">' + (st === 'part' ? '途中：' : '✓ ') + F.esc(got.map(function (r) {
             var who = r.by || r.entered_name || '';
@@ -844,7 +871,7 @@
             '<button type="button" data-down="' + c.cow_id + '" aria-label="下へ">↓</button>' +
             '<button type="button" class="danger" data-rm="' + c.cow_id + '">外す</button></div></li>';
         }
-        return '<li id="rc' + c.cow_id + '"><a href="#/repro/cow/' + c.cow_id + '"' + (st === 'done' ? ' class="done"' : st === 'part' ? ' class="part"' : '') + '>' + body + '</a></li>';
+        return '<li id="rc' + c.cow_id + '"' + (openLong(c) ? ' class="alert"' : '') + '><a href="#/repro/cow/' + c.cow_id + '"' + (st === 'done' ? ' class="done"' : st === 'part' ? ' class="part"' : '') + '>' + body + '</a></li>';
       };
       html += '<ul class="hits">' + todo.map(row).join('') + '</ul>';
       if (fin.length) {
@@ -1258,7 +1285,7 @@
     } else {
       html += '<div class="head"><div class="name"><b>農家さんへ渡すレポート</b></div></div>' +
         '<div class="seg"><button type="button" class="primary" data-pdf="1">PDF を送る・保存する</button></div>' +
-        '<p class="small muted" id="rpdfmsg">ボタンを押すと、LINE やメールなどの送り先を選べます。</p><div id="rpages"></div>';
+        '<p class="small muted" id="rpdfmsg">iPhone：送り先に LINE、「ファイルに保存」で OneDrive を選べます。PC：保存する場所（OneDrive のフォルダなど）を選べます。</p><div id="rpages"></div>';
       F.app.innerHTML = html;
       var pages = drawReport(R), box = document.getElementById('rpages');
       pages.forEach(function (c) { c.className = 'rpage'; box.appendChild(c); });
@@ -1268,6 +1295,17 @@
         var name = '繁殖検診報告_' + d.replace(/-/g, '') + '.pdf', blob = pdfFrom(pages), msg = document.getElementById('rpdfmsg');
         var file = null;
         try { file = new File([blob], name, { type: 'application/pdf' }); } catch (err) { file = null; }
+        // 2026-11-23 本人「PC からだと OneDrive や LINE に添付できなさそう」: PC（指で触らない画面）では保存先を選ぶ窓を出す。
+        // OneDrive のフォルダを選べばそのまま OneDrive に入り、LINE（PC）にはそのファイルを引っぱって入れる。前に選んだフォルダを覚える
+        var phone = (navigator.maxTouchPoints || 0) > 0 && /iPhone|iPad|Android|Mobile/i.test(navigator.userAgent);
+        if (!phone && window.showSaveFilePicker) {
+          window.showSaveFilePicker({ suggestedName: name, id: 'repro-pdf', startIn: 'documents',
+                                      types: [{ description: 'PDF', accept: { 'application/pdf': ['.pdf'] } }] })
+            .then(function (h) { return h.createWritable().then(function (w) { return w.write(blob).then(function () { return w.close(); }); }).then(function () { return h.name; }); })
+            .then(function (nm) { if (msg) msg.textContent = nm + ' を保存しました。LINE（PC）には、このファイルをトークに引っぱって入れると添付できます。'; })
+            .catch(function (err) { if (err && err.name !== 'AbortError' && msg) msg.textContent = '保存できませんでした: ' + err.message; });
+          return;
+        }
         if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
           navigator.share({ files: [file], title: name }).catch(function () { /* やめたときは何もしない */ });
           return;
@@ -1319,7 +1357,8 @@
       '<div class="head rcowhead"><div class="no">' + F.no(S.open, c && c.mgmt_no) + '</div>' +
       '<div class="id">' + F.esc((c && (c.repro_status || c.reason)) || 'リストに無い牛') + '</div>' +
       (facts.length ? '<div class="facts">' + facts.map(function (f) {
-        return '<div class="fact"><b>' + F.esc(f[1] == null ? '—' : f[1]) + '</b><span>' + f[0] + '</span></div>';
+        var v = f[1] == null ? '—' : f[1], cls = f[0] === 'ロボ乳量' && f[1] != null ? (Number(f[1]) >= MILK_HIGH ? ' class="c-red"' : Number(f[1]) >= MILK_WARN ? ' class="c-orange"' : '') : '';
+        return '<div class="fact"><b' + cls + '>' + F.esc(v) + '</b><span>' + f[0] + '</span></div>';
       }).join('') + '</div>' : '') +
       (c && c.test_ym ? '<div class="small muted">乳検 ' + F.esc(c.test_ym) + '（' + F.esc(c.test_age_days) + '日前' + (c.test_flag ? '・' + F.esc(c.test_flag) : '') +
         '）P/F ' + F.n(c.pf_ratio, 2) + '</div>' : '') +

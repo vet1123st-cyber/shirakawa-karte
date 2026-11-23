@@ -15,6 +15,9 @@
   --spark: #2f7d62;
   --spark2: #b07a1a;
   --on-accent: #ffffff;      /* accent の上の字（ダークでは濃い色） */
+  --orange: #c25a00;          /* 注意（ET予定・乳量45kg・未授精60日超） */
+  --orange-bg: #fff1e0;
+  --red: #c00000;             /* 強い注意（乳量50kg） */
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -33,6 +36,9 @@
     --spark: #6cc3a0;
     --spark2: #e0b45a;
     --on-accent: #0b2a1f;
+    --orange: #ffad5c;
+    --orange-bg: #3a2a14;
+    --red: #ff7b7b;
   }
 }
 * { box-sizing: border-box; }
@@ -577,3 +583,9 @@ main:has(.rokbar) { padding-bottom: calc(160px + env(safe-area-inset-bottom)); }
 .pickfoot { position: sticky; bottom: calc(64px + env(safe-area-inset-bottom)); padding: 8px 0; background: var(--bg); z-index: 5; }
 .pickfoot button[disabled] { opacity: .5; }
 .rgone > summary { background: var(--card); color: var(--muted); border-left-color: var(--line); }
+
+/* 目で拾う印（2026-11-23 本人）：ET予定・乳量45kg はオレンジ、乳量50kg は赤、未授精60日超はオレンジの印と左の線 */
+.c-orange { color: var(--orange); font-weight: 700; }
+.c-red { color: var(--red); font-weight: 700; }
+.chip.c-alert { background: var(--orange-bg); color: var(--orange); font-weight: 700; }
+.hits li.alert > a, .pickrow.alert { box-shadow: inset 5px 0 0 var(--orange); }
